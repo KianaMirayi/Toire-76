@@ -1,0 +1,58 @@
+# ---- 构建产物 ----
+build/
+out/
+.vs/
+*.obj
+*.o
+*.lib
+*.dll
+*.exe
+*.pdb
+*.ilk
+*.exp
+*.vst3
+*.idb
+
+# ---- 中间过程与逆向资料（不入库）----
+measure/
+refs/
+blender/
+renders/
+docs/
+LA-2A-开发经验总结.md
+
+# ---- 文档一律不入库 ----
+*.md
+!WebUI/README.md
+
+# ---- 图片：只保留插件运行必需的前端资产 ----
+*.png
+*.jpg
+*.jpeg
+*.webp
+*.gif
+*.psd
+*.blend
+*.blend1
+*.txt
+!CMakeLists.txt
+*.log
+*.csv
+*.json
+!WebUI/assets/*.png
+!WebUI/fonts/*.woff2
+!WebUI/ui-config.js
+!CMakePresets.json
+!.vscode/*.json
+
+# ---- 其它 ----
+.DS_Store
+Thumbs.db
+*.suo
+*.user
+*.cache
+__pycache__/
+*.pyc
+*.wav
+*.mp4
+*.zip

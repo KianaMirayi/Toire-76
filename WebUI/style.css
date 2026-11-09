@@ -1,0 +1,137 @@
+@font-face {
+  font-family: "Kings";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("fonts/kings-latin.woff2") format("woff2");
+}
+
+/* TOiRE-76 WebUI — 参考画布 950x175（css px == 画布 px）
+ *
+ * 派生自 web/style.css（v6 分层合成版），差异：
+ *   1. 资产路径 ../renders/ -> assets/（index.html 里也一样）
+ *   2. 旋钮加了真实的命中区（web 版 .knob-wrap 是 0x0，拖不到）
+ *   3. 加 #errors 红条、POWER/BYPASS 开关、可开关的调试 HUD
+ *   4. #stage 按窗口大小等比缩放（--zoom 由 app.js 的 fit() 设置）
+ */
+
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; background: #08080a; overflow: hidden; }
+body {
+  display: flex; align-items: center; justify-content: center;
+  width: 100vw; height: 100vh;
+}
+
+#stage { transform: scale(var(--zoom, 1)); transform-origin: center center; }
+
+#panel {
+  position: relative;
+  width: 950px;
+  height: 175px;
+  overflow: hidden;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* z0 : 静态面板（拉丝 / 四角孔 / 螺丝 / PATCH / 凹槽 / 表框 / 纸面） */
+#panel-base, #meter-glass {
+  position: absolute;
+  left: 0; top: 0;
+  width: 950px; height: 175px;
+  display: block;
+}
+#panel-base { z-index: 0; }
+/* z30 : 表头玻璃反光（保持 DOM 顺序绘制，别加 z-index —— 会压到旋钮上） */
+#meter-glass { pointer-events: none; }
+
+/* z10 : 刻度层（SVG，由 components.json 的 markings 算出来） */
+#overlay { position: absolute; left: 0; top: 0; width: 950px; height: 175px; pointer-events: none; z-index: 10; }
+
+/* z20 : VU 指针（裁剪窗口里旋转，尾巴不会漏出去） */
+#vu-window {
+  position: absolute;
+  left: 651px; top: 43px;
+  width: 130px; height: 66px;
+  overflow: hidden;
+  pointer-events: none;
+}
+#vu-window img {
+  position: absolute;
+  display: block;
+  pointer-events: none;
+  -webkit-user-drag: none;
+}
+#needle-shadow { opacity: .45; }
+#needle-blade, #needle-shadow { will-change: transform; }
+
+/* z40 : 旋钮 = 静态本体 + 独立旋转指示针
+ *   ⚠️ web 版的 .knob-wrap 是 width:0;height:0，子元素又 pointer-events:none，
+ *      等于完全没有命中区（拖不动）。这里给 wrap 一个和本体一样大的盒子。 */
+.knob-wrap {
+  position: absolute;
+  cursor: ns-resize;
+  pointer-events: auto;
+}
+.knob-body, .knob-ind {
+  position: absolute;
+  display: block;
+  pointer-events: none;
+  -webkit-user-drag: none;
+  user-select: none;
+}
+.knob-ind { will-change: transform; }
+.knob-disc { position: absolute; pointer-events: none; -webkit-user-drag: none; }
+.knob-ind { filter: drop-shadow(0 0 0.9px #000) drop-shadow(0 0 0.9px #000) drop-shadow(0 0 1.6px rgba(0,0,0,.75)); }
+
+/* z41 : 按键 */
+.btn {
+  position: absolute;
+  background-repeat: no-repeat;
+  background-size: 100% 100%;
+  cursor: pointer;
+}
+.btn:active { filter: brightness(1.08); }
+
+/* POWER / BYPASS（原厂面板没有这两个控件，前端用 HTML 画） */
+#toggles { position: absolute; right: 10px; bottom: 5px; z-index: 60; }
+.tog {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 6px;
+  border: 1px solid #3a3a42;
+  border-radius: 2px;
+  background: rgba(8, 8, 10, .55);
+  color: #6a6a72;
+  font: 9px/1.5 "Arial Narrow", Arial, sans-serif;
+  letter-spacing: .9px;
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.tog.on { color: #e0b050; border-color: #8a6a2a; }
+.tog:active { filter: brightness(1.35); }
+
+/* 调试 HUD（?debug=1 才显示；DAW 里用来核对参数联动）
+   半透明底衬：面板底部的旋钮说明文字会从下面透出来，不加底衬读不清 */
+#hud {
+  position: absolute; left: 10px; bottom: 4px;
+  font: 10px/1.35 ui-monospace, Consolas, monospace;
+  color: #a8a8b0; text-align: left; pointer-events: none;
+  white-space: pre; display: none; z-index: 60;
+  padding: 1px 5px;
+  background: rgba(8, 8, 10, .74);
+  border-radius: 2px;
+}
+
+/* 错误红条：WebView2 里没有 DevTools，白屏时靠它说话 */
+#errors {
+  position: fixed; top: 0; left: 0; right: 0;
+  background: #300; color: #f88;
+  padding: 8px;
+  font: 12px monospace;
+  z-index: 999;
+  display: none;
+  white-space: pre-wrap;
+  max-height: 200px;
+  overflow: auto;
+}

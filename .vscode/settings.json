@@ -1,0 +1,31 @@
+{
+    "cmake.useCMakePresets": "always",
+    "cmake.configureOnOpen": false,
+    "cmake.buildBeforeRun": false,
+    "cmake.generator": "Visual Studio 18 2026",
+    "cmake.configureSettings": {
+        "TOIRE76_WEBVIEW2": "ON"
+    },
+    "C_Cpp.default.configurationProvider": "ms-vscode.cmake-tools",
+    "C_Cpp.errorSquiggles": "enabled",
+    "C_Cpp.intelliSenseEngine": "default",
+    "files.encoding": "utf8",
+    "files.associations": {
+        "*.h": "cpp",
+        "*.js": "javascript"
+    },
+    "files.exclude": {
+        "build/CMakeFiles": true,
+        "build/juce": true,
+        "build/x64": true,
+        "build/**/*.dir": true
+    },
+    "search.exclude": {
+        "build": true,
+        "renders": true,
+        "refs": true,
+        "measure/rea": true
+    },
+    "editor.formatOnSave": false,
+    "powershell.codeFormatting.preset": "OTBS"
+}

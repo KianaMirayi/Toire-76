@@ -1,0 +1,78 @@
+@font-face {
+  font-family: "Kings";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("fonts/kings-latin.woff2") format("woff2");
+}
+
+/* TOiRE-76 UI skeleton — reference canvas 950x175 (px == css px) */
+* { box-sizing: border-box; }
+html, body { margin: 0; background: #08080a; }
+body { display: flex; align-items: center; justify-content: center; min-height: 100vh; }
+
+#stage { transform: scale(var(--zoom, 1)); transform-origin: center center; }
+
+#panel {
+  position: relative;
+  width: 950px;
+  height: 175px;
+  overflow: hidden;
+  user-select: none;
+}
+
+#panel-base, #meter-glass { position: absolute; inset: 0; width: 950px; height: 175px; display: block; }
+#meter-glass { pointer-events: none; z-index: 30; }
+#panel-base { z-index: 0; }
+
+#overlay { position: absolute; inset: 0; pointer-events: none; z-index: 10; }
+
+/* ---- knobs: static body sprite + independent rotating indicator ---- */
+.knob-wrap {
+  position: absolute;
+  width: 0; height: 0;
+  cursor: ns-resize;
+  pointer-events: auto;
+}
+.knob-body, .knob-ind {
+  position: absolute;
+  display: block;
+  pointer-events: none;
+  -webkit-user-drag: none;
+  user-select: none;
+}
+.knob-ind { will-change: transform; }
+.knob-disc { position: absolute; pointer-events: none; -webkit-user-drag: none; }
+.knob-ind { filter: drop-shadow(0 0 0.9px #000) drop-shadow(0 0 0.9px #000) drop-shadow(0 0 1.6px rgba(0,0,0,.75)); }
+
+/* ---- VU pointer: rotate inside a clipped window (no tail leak) ---- */
+#vu-window {
+  position: absolute;
+  left: 651px; top: 43px;
+  width: 130px; height: 66px;
+  overflow: hidden;
+  pointer-events: none;
+}
+#vu-window img {
+  position: absolute;
+  display: block;
+  pointer-events: none;
+  -webkit-user-drag: none;
+}
+#needle-shadow { opacity: .45; }
+#needle-blade, #needle-shadow { will-change: transform; }
+
+/* ---- buttons ---- */
+.btn {
+  position: absolute;
+  background-repeat: no-repeat;
+  background-size: 100% 100%;
+  cursor: pointer;
+}
+
+#hud {
+  position: absolute; right: 8px; bottom: 4px;
+  font: 10px/1.35 ui-monospace, Consolas, monospace;
+  color: #8a8a90; text-align: right; pointer-events: none;
+  white-space: pre;
+}

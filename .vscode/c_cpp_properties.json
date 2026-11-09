@@ -1,0 +1,31 @@
+{
+    "configurations": [
+        {
+            "name": "Win32",
+            "includePath": [
+                "${workspaceFolder}/src",
+                "${workspaceFolder}/build/TOIRE76_artefacts/JuceLibraryCode",
+                "${workspaceFolder}/build/_deps/**",
+                "E:/Programing/C++Hell/JUCE/modules/**",
+                "C:/Users/Admin/.nuget/packages/Microsoft.Web.WebView2/build/native/include",
+                "${default}"
+            ],
+            "defines": [
+                "_DEBUG",
+                "UNICODE",
+                "_UNICODE",
+                "JUCE_WEB_BROWSER=1",
+                "JUCE_USE_WIN_WEBVIEW2=1",
+                "JUCE_USE_CURL=0",
+                "JUCE_VST3_CAN_REPLACE_VST2=0",
+                "TOIRE76_WEBVIEW2=1"
+            ],
+            "compilerPath": "C:/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/MSVC/14.51.36231/bin/Hostx64/x64/cl.exe",
+            "cStandard": "c17",
+            "cppStandard": "c++17",
+            "intelliSenseMode": "windows-msvc-x64",
+            "configurationProvider": "ms-vscode.cmake-tools"
+        }
+    ],
+    "version": 4
+}

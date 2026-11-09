@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>TOiRE-76</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- ⚠️ WebView2 没有 DevTools：任何 JS 错误都显示在这条红带上 -->
+<div id="errors"></div>
+
+<div id="stage">
+  <div id="panel">
+    <!-- z0 : 静态面板（拉丝 / 四角孔 / 螺丝 / PATCH / 凹槽 / 表框 / 纸面） -->
+    <img id="panel-base" src="assets/panel_base.png" alt="panel">
+
+    <!-- z10 : 刻度层（SVG，由 components.json 的 markings 算出） -->
+    <svg id="overlay" viewBox="0 0 950 175" width="950" height="175"></svg>
+
+    <!-- z20 : VU 指针（裁剪窗口里旋转） -->
+    <div id="vu-window"></div>
+
+    <!-- z30 : 表头玻璃反光 -->
+    <img id="meter-glass" src="assets/meter_glass.png" alt="glass">
+
+    <!-- z40 / z41 : 运动部件 -->
+    <div id="knobs"></div>
+    <div id="buttons"></div>
+
+    <!-- POWER / BYPASS 由宿主（DAW）负责，面板上不再画 -->
+    <!-- 调试 HUD（?debug=1） -->
+    <div id="hud"></div>
+  </div>
+</div>
+
+<!-- ui-config.js 必须在 app.js 之前：配置是内联的，不读外部 JSON -->
+<script src="ui-config.js"></script>
+<script src="vu-layout.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

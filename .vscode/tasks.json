@@ -1,0 +1,64 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "CMake: configure (VS 2026, WebView2 ON)",
+            "type": "shell",
+            "command": "powershell",
+            "args": ["-ExecutionPolicy", "Bypass", "-File", "${workspaceFolder}\\scripts\\configure.ps1"],
+            "group": "build",
+            "problemMatcher": []
+        },
+        {
+            "label": "CMake: build Debug (Standalone)",
+            "type": "shell",
+            "command": "powershell",
+            "args": ["-ExecutionPolicy", "Bypass", "-File", "${workspaceFolder}\\scripts\\build.ps1", "-Config", "Debug"],
+            "group": { "kind": "build", "isDefault": true },
+            "problemMatcher": ["$msCompile"]
+        },
+        {
+            "label": "CMake: build Debug (Standalone + VST3)",
+            "type": "shell",
+            "command": "powershell",
+            "args": ["-ExecutionPolicy", "Bypass", "-File", "${workspaceFolder}\\scripts\\build.ps1", "-Config", "Debug", "-Target", "TOIRE76_Standalone", "TOIRE76_VST3"],
+            "group": "build",
+            "problemMatcher": ["$msCompile"]
+        },
+        {
+            "label": "CMake: build Release (Standalone + VST3)",
+            "type": "shell",
+            "command": "powershell",
+            "args": ["-ExecutionPolicy", "Bypass", "-File", "${workspaceFolder}\\scripts\\build.ps1", "-Config", "Release", "-Target", "TOIRE76_Standalone", "TOIRE76_VST3"],
+            "group": "build",
+            "problemMatcher": ["$msCompile"]
+        },
+        {
+            "label": "Deploy: WebUI -> artefacts (no rebuild)",
+            "type": "shell",
+            "command": "powershell",
+            "args": [
+                "-ExecutionPolicy", "Bypass", "-Command",
+                "$s='${workspaceFolder}\\WebUI'; $t=@('${workspaceFolder}\\build\\TOIRE76_artefacts\\Debug\\Standalone\\webui','${workspaceFolder}\\build\\TOIRE76_artefacts\\Debug\\VST3\\TOiRE-76.vst3\\Contents\\webui','${workspaceFolder}\\build\\TOIRE76_artefacts\\Release\\Standalone\\webui','${workspaceFolder}\\build\\TOIRE76_artefacts\\Release\\VST3\\TOiRE-76.vst3\\Contents\\webui','C:\\Program Files\\Common Files\\VST3\\TOiRE-76.vst3\\Contents\\webui'); foreach($d in $t){ if(Test-Path (Split-Path $d -Parent)){ if(Test-Path $d){Remove-Item $d -Recurse -Force}; Copy-Item $s $d -Recurse -Force; Write-Host \"webui -> $d\" } }"
+            ],
+            "group": "build",
+            "problemMatcher": []
+        },
+        {
+            "label": "Web: serve prototype on :8777",
+            "type": "shell",
+            "command": "C:\\Users\\Admin\\.dsh\\dsh-runtimes\\dsh-primary-runtime\\dependencies\\python\\python.exe",
+            "args": ["-m", "http.server", "8777", "--bind", "127.0.0.1", "--directory", "${workspaceFolder}"],
+            "isBackground": true,
+            "problemMatcher": {
+                "pattern": { "regexp": "^$" },
+                "background": {
+                    "activeOnStart": true,
+                    "beginsPattern": "Serving HTTP",
+                    "endsPattern": "Serving HTTP"
+                }
+            },
+            "group": "none"
+        }
+    ]
+}

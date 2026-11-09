@@ -1,0 +1,55 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "TOiRE-76 Standalone (Debug)",
+            "type": "cppvsdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}\\build\\TOIRE76_artefacts\\Debug\\Standalone\\TOiRE-76.exe",
+            "args": [],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}",
+            "environment": [],
+            "console": "integratedTerminal",
+            "preLaunchTask": "CMake: build Debug (Standalone)",
+            "symbolSearchPath": "${workspaceFolder}\\build"
+        },
+        {
+            "name": "TOiRE-76 Standalone (Release)",
+            "type": "cppvsdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}\\build\\TOIRE76_artefacts\\Release\\Standalone\\TOiRE-76.exe",
+            "args": [],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}",
+            "environment": [],
+            "console": "integratedTerminal",
+            "preLaunchTask": "CMake: build Release (Standalone + VST3)"
+        },
+        {
+            "name": "Attach: DAW / rea-viewer (debug the VST3)",
+            "type": "cppvsdbg",
+            "request": "attach",
+            "processId": "${command:pickProcess}",
+            "symbolSearchPath": "${workspaceFolder}\\build"
+        },
+        {
+            "name": "Web UI: Edge (prototype on :8777)",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://127.0.0.1:8777/web/index.html?debug=1",
+            "webRoot": "${workspaceFolder}",
+            "runtimeExecutable": "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
+            "userDataDir": "${workspaceFolder}\\build\\vscode-edge-profile",
+            "sourceMaps": false
+        }
+    ],
+    "compounds": [
+        {
+            "name": "Web UI: serve + Edge",
+            "configurations": ["Web UI: Edge (prototype on :8777)"],
+            "preLaunchTask": "Web: serve prototype on :8777",
+            "stopAll": true
+        }
+    ]
+}
