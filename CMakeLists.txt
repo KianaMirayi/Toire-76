@@ -13,6 +13,15 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 # ─────────────────────────────────────────────────────────────
 option(TOIRE76_WEBVIEW2 "Build with the WebView2 backend (Web UI)" ON)
 
+# ─────────────────────────────────────────────────────────────
+# 原生 JUCE 渲染 POC（默认 OFF）
+#   ON：额外构建一个 GUI demo（TOIRE76_NativeDemo），用同一批 WebUI/assets
+#       素材 + 纯 juce::Graphics 画一遍 UI，用来和 WebView2 版比效果/体积/依赖。
+#   不影响插件目标，也不进插件产物。
+# ─────────────────────────────────────────────────────────────
+option(TOIRE76_NATIVE_DEMO "Build the native-JUCE UI POC (for WebView2 comparison)" OFF)
+
+
 add_subdirectory(../JUCE ${CMAKE_BINARY_DIR}/juce)
 
 juce_add_plugin(TOIRE76
@@ -138,3 +147,54 @@ else()
         TOIRE76_HAS_WEBVIEW=0)
     message(STATUS "TOiRE-76: native placeholder UI (WebView2 disabled)")
 endif()
+
+# ─────────────────────────────────────────────────────────────
+# 原生 JUCE 渲染 POC（TOIRE76_NATIVE_DEMO=ON 时构建）
+#
+#   用途：同一批素材（WebUI/assets）+ 同一份布局数据，用纯 juce::Graphics
+#   画一遍，和 WebView2 版对比效果 / 体积 / 运行时依赖。
+#
+#   不链接任何 WebView 模块（juce_gui_extra 的 WebBrowserComponent 不会被拉进来），
+#   所以产物不需要 WebView2Loader.dll，也不需要 WebView2 Runtime。
+# ─────────────────────────────────────────────────────────────
+if(TOIRE76_NATIVE_DEMO)
+    juce_add_gui_app(TOIRE76_NativeDemo
+        PRODUCT_NAME "TOiRE-76 Native Demo"
+        COMPANY_NAME "TOREI"
+        VERSION 0.1.0)
+
+    # ⚠️ JUCE 8：必须在 target_sources 之前生成 JuceHeader.h
+    juce_generate_juce_header(TOIRE76_NativeDemo)
+
+    target_sources(TOIRE76_NativeDemo PRIVATE
+        src/ui/NativeDemoMain.cpp
+        src/ui/NativePanel.cpp)
+
+    target_include_directories(TOIRE76_NativeDemo PRIVATE src)
+
+    target_compile_definitions(TOIRE76_NativeDemo PUBLIC
+        JUCE_WEB_BROWSER=0
+        JUCE_USE_CURL=0)
+
+    if(MSVC)
+        target_compile_options(TOIRE76_NativeDemo PRIVATE /utf-8)
+    endif()
+
+    target_link_libraries(TOIRE76_NativeDemo
+        PRIVATE
+            juce::juce_gui_extra
+        PUBLIC
+            juce::juce_recommended_config_flags
+            juce::juce_recommended_warning_flags)
+
+    # 素材不重新渲染：直接把 WebUI/assets 拷到 demo exe 旁边（assets/）
+    add_custom_command(TARGET TOIRE76_NativeDemo POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${CMAKE_CURRENT_SOURCE_DIR}/WebUI/assets"
+            "$<TARGET_FILE_DIR:TOIRE76_NativeDemo>/assets"
+        COMMENT "TOiRE-76: deploying WebUI/assets -> NativeDemo/assets"
+        VERBATIM)
+
+    message(STATUS "TOiRE-76: native render demo ENABLED (TOIRE76_NativeDemo)")
+endif()
+
