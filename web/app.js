@@ -373,6 +373,11 @@
   }
   function knobTheta(k, v) {
     var c = find(k.id);
+    /* 大旋钮（INPUT/OUTPUT）：panel 上「0」在 CW 端、「∞」在 CCW 端，
+       UAD 里 norm=1 → 0 dB（最响）。所以大旋钮的角度要反过来算，
+       顺时针（角度增大方向）对应 norm 变大。 */
+    if (k.kind === "big")
+      return c.angle_max_deg + v * (c.angle_min_deg - c.angle_max_deg);
     return c.angle_min_deg + v * (c.angle_max_deg - c.angle_min_deg);
   }
 
