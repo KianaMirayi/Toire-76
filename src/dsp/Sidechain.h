@@ -142,12 +142,11 @@ public:
         const double r = rectify(sampleAfterGR);
         const double dt = 1.0 / sr_;
 
-        // 过载持续性探测：慢跟随器（≈300 ms），用来判断"这次是短瞬态还是长时间压"
-        const double sustainAlpha = 1.0 - std::exp(-dt / 0.3);
+        // 过载持续性探测：200 ms 慢跟随器（回退版：30 ms 计数版会让 release 整体变快，
+        // 与实测差太多；节目相关性留待用双电容结构重做）
+        const double sustainAlpha = 1.0 - std::exp(-dt / 0.2);
         sustain_ += (r - sustain_) * sustainAlpha;
-
-        // 持续过载 → 用慢 release；短瞬态 → 用快 release
-        const bool sustained = sustain_ > 0.45 * std::max(vc_, 1e-9);
+        const bool sustained = sustain_ > 0.6 * std::max(vc_, 1e-9);
         const double tauRel = sustained ? tauRelSlow_ : tauRelFast_;
         const double tau = (r > vc_) ? tauAtk_ : tauRel;
 

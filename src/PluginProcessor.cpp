@@ -142,6 +142,7 @@ void TOIRE76AudioProcessor::prepareToPlay (double sampleRate, int samplesPerBloc
 
     latencySamples = osLatency + extra;
     setLatencySamples (latencySamples);
+    updateHostDisplay (juce::AudioProcessor::ChangeDetails().withLatencyChanged (true));
 }
 
 void TOIRE76AudioProcessor::releaseResources() {}
