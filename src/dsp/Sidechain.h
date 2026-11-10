@@ -39,7 +39,7 @@ public:
 
     // 各档限幅阈值（设备输入端 dBFS，UAD 实测 2026-11-11，Input 旋钮 0 dB）
     static constexpr double kThresholdDb[4] = {-52.7, -50.2, -48.8, -46.8};   // 实测值再下移 2 dB 抵消模型偏置
-    static constexpr double kAllThresholdDb = -50.2;
+    static constexpr double kAllThresholdDb = -44.9;
 
     // 目标压缩比：**实测等效值**（真机比面板标称更陡，1176 的已知特性）
     // 注意：这里存的是控制律参数，不是面板标称 ratio。
@@ -74,9 +74,17 @@ public:
 
     /** 面板 0..1（0=最慢/最小，1=最快/最大）；对数插值 */
     /**
-     * 面板 0..1（**顺时针 = 更快**，与手册 "clockwise fastest" 一致）
-     *   attack : 800 µs (n=0) → 20 µs (n=1)      【手册 20–800 µs】
-     *   release: 1600 ms (n=0) → 85 ms (n=1)      【UAD 实测 1735 / 85 ms】
+     * 面板 0..1（**顺时针 = 更快**）
+     *
+     * attack 用**逆向出来的映射**（比测量更可靠）：
+     *   UADx 的 algo 里有一张 130×8 的系数表（decrypted.dll @ 0x18143cf70），
+     *   索引参数 col7 ∈ [1.60, 2.89] 步进 0.01，正是 log10(attack 微秒)：
+     *       10^1.60 =  39.8 µs      10^2.89 = 776 µs
+     *   所以：param = 1.60 + knob × 1.29，tau = 10^param (µs)。
+     *   （手册标 20–800 µs，实测 39.8–776 µs 落在同一量级）
+     *
+     * release 用**音频实测**：
+     *   1600 ms (n=0) → 85 ms (n=1)
      * release 还带节目相关性：同样的旋钮，长过载的 release 更慢，
      *   倍率 1.08（慢档）→ 3.94（快档），见 kSustainScale()。
      */
@@ -85,19 +93,43 @@ public:
         releaseNorm = std::clamp(releaseNorm, 0.0, 1.0);
         attackNorm_ = attackNorm;
         releaseNorm_ = releaseNorm;
-        tauAtk_ = kAttackMaxSec * std::pow(kAttackMinSec / kAttackMaxSec, attackNorm);
-        tauRelFast_ = 0.085 * std::pow(1.60 / 0.085, 1.0 - releaseNorm);
-        tauRel_ = tauRelFast_ * sustainScale(releaseNorm);
+        // 逆向映射：log10(µs) = 1.60 + knob × 1.29
+        const double log10us = 1.60 + attackNorm * 1.29;
+        tauAtk_ = std::pow(10.0, log10us) * 1e-6;
+        tauRelFast_ = releaseTauFast(releaseNorm);
+        tauRelSlow_ = releaseTauSlow(releaseNorm);
+        tauRel_ = tauRelSlow_;
     }
 
-    /** 节目相关性倍率：长过载 → release 变慢（实测 1.08 / 1.24 / 1.94 / 3.94） */
-    static double sustainScale(double n) {
+    /**
+     * Release 时间常数：直接查**UAD 实测表**（单位秒）
+     *
+     *   旋钮     短过载(0.02 s)   中(0.5 s)   长过载(2 s)
+     *   0.00        1600 ms        1659 ms     1735 ms
+     *   0.34        1195 ms        1328 ms     1484 ms
+     *   0.67         412 ms         532 ms      800 ms
+     *   1.00          85 ms         119 ms      335 ms
+     *
+     * 短过载用 fast 曲线，持续过载切到 slow 曲线 —— 这就是"节目相关性"。
+     */
+    static double interp4(const double ys[4], double n) {
         static const double xs[4] = {0.00, 0.34, 0.67, 1.00};
-        static const double ys[4] = {1.08, 1.24, 1.94, 3.94};
+        n = std::clamp(n, 0.0, 1.0);
         for (int i = 1; i < 4; ++i)
             if (n <= xs[i])
                 return ys[i-1] + (ys[i]-ys[i-1]) * (n - xs[i-1]) / (xs[i]-xs[i-1]);
         return ys[3];
+    }
+    // 1.7 是"模型 → 插件实测"的标定系数：我们的 RC 一阶在闭环里衰减慢一档，
+    // 逐档对比后实测比值稳定在 ~1.7（见 measure/renders/charts/cmp_release.png）
+    static constexpr double kReleaseCal = 1.7;
+    static double releaseTauFast(double n) {
+        static const double ys[4] = {1.600, 1.195, 0.412, 0.085};
+        return interp4(ys, n) * kReleaseCal;
+    }
+    static double releaseTauSlow(double n) {
+        static const double ys[4] = {1.735, 1.484, 0.800, 0.335};
+        return interp4(ys, n) * kReleaseCal;
     }
 
     /** 全波整流 + 二极管偏置（偏置已含输入衰减补偿） */
@@ -115,8 +147,8 @@ public:
         sustain_ += (r - sustain_) * sustainAlpha;
 
         // 持续过载 → 用慢 release；短瞬态 → 用快 release
-        const bool sustained = sustain_ > 0.5 * std::max(vc_, 1e-9);
-        const double tauRel = sustained ? tauRel_ : tauRelFast_;
+        const bool sustained = sustain_ > 0.45 * std::max(vc_, 1e-9);
+        const double tauRel = sustained ? tauRelSlow_ : tauRelFast_;
         const double tau = (r > vc_) ? tauAtk_ : tauRel;
 
         const double alpha = 1.0 - std::exp(-dt / std::max(tau, 1e-9));
@@ -152,18 +184,21 @@ public:
 private:
     void updateBias() {
         // bias 是"正弦峰值"单位：0 dBFS 正弦峰值 = 1.0
-        const double dB = thrDb_ + attenDb_;
+        // 阈值直接按设备输入端定义：侧链本来就取自衰减之后的信号，
+        // 输入衰减会自动把"触发所需输入电平"抬高，不需要再补偿一次
+        const double dB = thrDb_;
         bias_ = feed_ * std::pow(10.0, dB / 20.0);
     }
 
     double sr_ = 48000.0;
     double vc_ = 0.0;
     double sustain_ = 0.0;
-    double tauRelFast_ = 0.085;
+    double tauRelFast_ = 1.6;
+    double tauRelSlow_ = 1.735;
     double attackNorm_ = 0.5;
     double releaseNorm_ = 0.666;
     double tauAtk_ = kAttackMinSec;
-    double tauRel_ = kReleaseMinSec;
+    double tauRel_ = kReleaseMaxSec;
     int ratio_ = 0;
     double thrDb_ = kThresholdDb[0];
     double ratioTarget_ = 4.0;
