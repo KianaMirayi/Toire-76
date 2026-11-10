@@ -198,3 +198,30 @@ if(TOIRE76_NATIVE_DEMO)
     message(STATUS "TOiRE-76: native render demo ENABLED (TOIRE76_NativeDemo)")
 endif()
 
+# ─────────────────────────────────────────────────────────────
+# DSP 离线验证（TOIRE76_DSP_TEST=ON 时构建）
+#
+#   纯 C++17，不链接 JUCE：src/dsp/*.h 是 header-only 的灰盒模型，
+#   这个 target 只把它们跑一遍静态曲线 / 包络，用于和测量数据对标。
+# ─────────────────────────────────────────────────────────────
+option(TOIRE76_DSP_TEST "Build the offline DSP verification harness" ON)
+
+if(TOIRE76_DSP_TEST)
+    add_executable(TOIRE76_DspTest
+        tests/dsp_test.cpp)
+
+    target_include_directories(TOIRE76_DspTest PRIVATE src)
+
+    if(MSVC)
+        target_compile_options(TOIRE76_DspTest PRIVATE /utf-8 /W3)
+    else()
+        target_compile_options(TOIRE76_DspTest PRIVATE -Wall -Wextra)
+    endif()
+
+    set_target_properties(TOIRE76_DspTest PROPERTIES
+        CXX_STANDARD 17
+        CXX_STANDARD_REQUIRED ON)
+
+    message(STATUS "TOiRE-76: DSP test harness ENABLED (TOIRE76_DspTest)")
+endif()
+
