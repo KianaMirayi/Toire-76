@@ -99,9 +99,6 @@ double TOIRE76AudioProcessor::outputNormToDb (float norm) { return knobNormToDb 
 
 void TOIRE76AudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 {
-    compressor.prepare (sampleRate);
-    compressor.reset();
-
     // 过采样倍数：让内部 FSR 落在 ~192 kHz（与参考实现同量级）
     //   48k  → 4×（内部 192k）
     //   96k  → 2×（内部 192k）
@@ -139,6 +136,12 @@ void TOIRE76AudioProcessor::prepareToPlay (double sampleRate, int samplesPerBloc
                                (juce::uint32) juce::jmax (1, getTotalNumOutputChannels()) });
         extraDelay->setDelay ((float) extra);
     }
+
+    // ⚠️ 模型跑在内部 FSR 上（过采样 4×/2×），时间常数必须按内部采样率准备，
+    //    否则 release/attack 会快 2–4 倍（曾经踩过：release 1613 ms 变成 445 ms）
+    const double internalRate = sampleRate * double (1 << factorLog2);
+    compressor.prepare (internalRate);
+    compressor.reset();
 
     latencySamples = osLatency + extra;
     setLatencySamples (latencySamples);
