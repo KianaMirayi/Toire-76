@@ -2,12 +2,14 @@
 
 #include <JuceHeader.h>
 
+#include "dsp/Compressor76.h"
+
 /**
- * TOiRE-76 —— UAD 1176 风格的 FET 压缩器（当前阶段：只有骨架，DSP 直通）。
+ * TOiRE-76 —— UAD 1176 风格的 FET 压缩器（L2 灰盒 DSP）。
  *
- * 这一层只负责三件事：
+ * 这一层负责三件事：
  *   1. APVTS 参数表（与 web/ + renders/components.json 的插件契约一致）
- *   2. processBlock：power / bypass 检查 + 直通，**没有任何 DSP**
+ *   2. processBlock：参数 → 物理量 → toire76::Compressor76（立体声联动侧链）
  *   3. createEditor：交给 WebView2 版编辑器
  *
  * 参数 id / 顺序是前端契约的一部分（components.json -> params.order），
@@ -56,9 +58,20 @@ public:
 private:
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
 
-    // 只有 processBlock 会用到的两个开关（其余参数由前端 relay 直接读写）
-    std::atomic<float>* powerParam  = nullptr;
-    std::atomic<float>* bypassParam = nullptr;
+    // processBlock 用到的参数缓存（前端 relay 仍直接读写 APVTS）
+    std::atomic<float>* inputParam   = nullptr;
+    std::atomic<float>* outputParam  = nullptr;
+    std::atomic<float>* attackParam  = nullptr;
+    std::atomic<float>* releaseParam = nullptr;
+    std::atomic<float>* ratioParam   = nullptr;
+    std::atomic<float>* powerParam   = nullptr;
+    std::atomic<float>* bypassParam  = nullptr;
+
+    toire76::Compressor76 compressor;
+
+    /** 面板归一化值 → 物理量（taper 待实测替换，见 docs/DSP-电路映射.md §二 #1/#8） */
+    static double inputNormToDb  (float norm);
+    static double outputNormToDb (float norm);
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (TOIRE76AudioProcessor)
 };

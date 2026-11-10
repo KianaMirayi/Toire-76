@@ -60,18 +60,42 @@ TOIRE76AudioProcessor::TOIRE76AudioProcessor()
                           .withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
       apvts (*this, nullptr, "PARAMETERS", createParameterLayout())
 {
-    powerParam  = apvts.getRawParameterValue ("power");
-    bypassParam = apvts.getRawParameterValue ("bypass");
+    inputParam   = apvts.getRawParameterValue ("input");
+    outputParam  = apvts.getRawParameterValue ("output");
+    attackParam  = apvts.getRawParameterValue ("attack");
+    releaseParam = apvts.getRawParameterValue ("release");
+    ratioParam   = apvts.getRawParameterValue ("ratio");
+    powerParam   = apvts.getRawParameterValue ("power");
+    bypassParam  = apvts.getRawParameterValue ("bypass");
 }
 
 TOIRE76AudioProcessor::~TOIRE76AudioProcessor() = default;
 
 //==============================================================================
+// 面板归一化 → 物理量（占位 taper，实测后替换）
+//
+// 依据：UAD 插件参数文本显示 Input 0.2 ≈ −40.57 dB、Output 0.6259 ≈ −17.96 dB，
+// 两者都不是线性 dB。这里先用「线性 dB」占位：
+//   Input  norm 1.0 = 0 dB（不衰减），norm 0.0 = −40 dB
+//   Output norm 1.0 = 0 dB，          norm 0.0 = −45 dB
+double TOIRE76AudioProcessor::inputNormToDb (float norm)
+{
+    return double (juce::jlimit (0.0f, 1.0f, norm) - 1.0f) * 40.0;
+}
+
+double TOIRE76AudioProcessor::outputNormToDb (float norm)
+{
+    return double (juce::jlimit (0.0f, 1.0f, norm) - 1.0f) * 45.0;
+}
+
 void TOIRE76AudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 {
-    juce::ignoreUnused (sampleRate, samplesPerBlock);
+    juce::ignoreUnused (samplesPerBlock);
 
-    // 这一轮没有 DSP、没有延迟补偿
+    compressor.prepare (sampleRate);
+    compressor.reset();
+
+    // L2 模型内部是一采样延迟的反馈解，没有额外 FIR 延迟
     setLatencySamples (0);
 }
 
@@ -111,9 +135,37 @@ void TOIRE76AudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
         return;
     }
 
-    // ── 直通 ──────────────────────────────────────────────────
-    // 这一轮不实现 DSP。输入缓冲原样保留即可（in-place）。
-    // 多余的输出通道（输入比输出少时）必须清掉，否则宿主会读到噪声。
+    // ── 参数 → 物理量 ─────────────────────────────────────────
+    compressor.setInputDb   (inputNormToDb   (inputParam   ? inputParam  ->load() : 0.2f));
+    compressor.setOutputDb  (outputNormToDb  (outputParam  ? outputParam ->load() : 0.6259f));
+    compressor.setAttackNorm (attackParam  ? attackParam  ->load() : 0.5f);
+    compressor.setReleaseNorm(releaseParam ? releaseParam ->load() : 0.666f);
+    compressor.setRatioIndex (ratioParam ? int (ratioParam->load() + 0.5f) : 0);
+    compressor.setPower (true);
+
+    // ── 处理 ─────────────────────────────────────────────────
+    const int numCh = buffer.getNumChannels();
+
+    if (numCh >= 2)
+    {
+        auto* l = buffer.getWritePointer (0);
+        auto* r = buffer.getWritePointer (1);
+        for (int i = 0; i < numSamples; ++i)
+        {
+            double dl = double (l[i]), dr = double (r[i]);
+            compressor.processStereo (dl, dr);
+            l[i] = float (dl);
+            r[i] = float (dr);
+        }
+    }
+    else if (numCh == 1)
+    {
+        auto* m = buffer.getWritePointer (0);
+        for (int i = 0; i < numSamples; ++i)
+            m[i] = float (compressor.processSample (double (m[i])));
+    }
+
+    // 多余的输出通道（输入比输出少时）必须清掉，否则宿主会读到噪声
     const int numInputChannels = getTotalNumInputChannels();
 
     for (int ch = numInputChannels; ch < buffer.getNumChannels(); ++ch)
