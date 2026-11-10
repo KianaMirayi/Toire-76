@@ -75,27 +75,44 @@ TOIRE76AudioProcessor::TOIRE76AudioProcessor()
 TOIRE76AudioProcessor::~TOIRE76AudioProcessor() = default;
 
 //==============================================================================
-// 面板归一化 → 物理量（taper 实测自 UADx 1176 的 --sweep 回读）
-//
-// 实测表（Input 与 Output 完全一致）：
-//   norm 0.0909 → −51.17 dB    norm 0.5455 → −21.82 dB
-//   norm 0.1818 → −42.34 dB    norm 0.6364 → −17.46 dB
-//   norm 0.2727 → −34.91 dB    norm 1.0000 →   0.00 dB
-// 0.2727 以上严格线性：4.36 dB / 0.0909 ≈ 48 dB/unit；0 处为 −Inf（静音）。
-static double knobNormToDb (float norm)
+// ── 面板旋钮 → 相对增益（dB）────────────────────────────────
+// 实测：参考插件 21 点扫描（input/output 各一遍），归一化到 v=1.0 → 0 dB。
+//   输入旋钮：全程只改变约 6.9 dB，低端最陡（0.00 处 −6.86 dB）
+//   输出旋钮：全程约 100 dB（0.00 处 −99.99 dB，近似静音）
+static constexpr double kKnobX[21] = {
+        0.00, 0.05, 0.10, 0.15, 0.20, 0.25, 0.30, 0.35,
+        0.40, 0.45, 0.50, 0.55, 0.60, 0.65, 0.70, 0.75,
+        0.80, 0.85, 0.90, 0.95, 1.00
+};
+static constexpr double kInputRelDb[21] = {
+        -6.86, -5.58, -3.81, -1.76, -1.34, -1.04, -0.97, -0.90,
+        -0.77, -0.60, -0.49, -0.37, -0.31, -0.25, -0.21, -0.16,
+        -0.04, 0.00, 0.00, 0.00, 0.00
+};
+static constexpr double kOutputRelDb[21] = {
+        -99.99, -93.55, -76.43, -62.35, -55.02, -47.99, -41.53, -35.87,
+        -30.78, -26.12, -21.81, -17.85, -14.48, -11.43, -8.60, -6.06,
+        -4.01, -2.32, -0.98, -0.12, 0.00
+};
+
+static double interpKnob(const double* ys, double x)
 {
-    const double n = double (juce::jlimit (0.0f, 1.0f, norm));
-    static const double xs[] = { 0.0, 0.0909, 0.1818, 0.2727 };
-    static const double ys[] = { -80.0, -51.17, -42.34, -34.91 };
-    if (n <= xs[0]) return ys[0];
-    for (int i = 1; i < 4; ++i)
-        if (n <= xs[i])
-            return ys[i-1] + (ys[i]-ys[i-1]) * (n-xs[i-1]) / (xs[i]-xs[i-1]);
-    return 48.0 * (n - 1.0);          // 线性段：norm 1 → 0 dB
+    x = juce::jlimit (0.0, 1.0, x);
+    for (int i = 1; i < 21; ++i)
+        if (x <= kKnobX[i])
+            return ys[i-1] + (ys[i]-ys[i-1]) * (x - kKnobX[i-1]) / (kKnobX[i] - kKnobX[i-1]);
+    return ys[20];
 }
 
-double TOIRE76AudioProcessor::inputNormToDb (float norm)  { return knobNormToDb (norm); }
-double TOIRE76AudioProcessor::outputNormToDb (float norm) { return knobNormToDb (norm); }
+double TOIRE76AudioProcessor::inputNormToDb (float norm)
+{
+    return interpKnob (kInputRelDb, double (norm));
+}
+
+double TOIRE76AudioProcessor::outputNormToDb (float norm)
+{
+    return interpKnob (kOutputRelDb, double (norm));
+}
 
 void TOIRE76AudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 {

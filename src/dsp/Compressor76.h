@@ -105,7 +105,8 @@ public:
     Sidechain& sidechain() { return side_; }
 
 private:
-    static constexpr double kTotalGainDb = 45.0;   // 整机 45 dB ±1【1965 p.7】
+    // 整机增益：45 dB（手册）+ 1.96 dB 标定差（与参考插件实测对齐）
+    static constexpr double kTotalGainDb = 46.96;   // 整机 45 dB ±1【1965 p.7】
 
     static double dbToLin(double dB) { return std::pow(10.0, dB / 20.0); }
     static double db(double lin) { return 20.0 * std::log10(std::max(lin, 1e-12)); }
