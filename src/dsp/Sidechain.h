@@ -11,7 +11,7 @@
     阈值口径（重要）：
       1965 手册的阈值表是**设备输入端 dBm**（−22…−19）。
       但侧链实际看到的是「输入衰减 + GR 之后」的信号，所以
-          侧链阈值(dB) = 手册阈值(dB) + 输入衰减(dB，负数)
+           侧链阈值(dB) = 手册阈值(dB) + 输入衰减(dB，负数)
       否则 Input 旋钮一拧到 −40 dB，压缩就永远不触发。
       这个换算由 setAttenuationDb() 完成，Compressor76 在 setInputDb() 里同步。
 
@@ -28,6 +28,9 @@ namespace toire76 {
 
 class Sidechain {
 public:
+    // release 模型的标识（dsp_test 会打印，用来确认跑的是新编译产物）
+    static constexpr const char* kReleaseModel = "dual-cap-v3";
+
     static constexpr int kNumRatios = 5;   // 4:1 / 8:1 / 12:1 / 20:1 / ALL
     static constexpr int kAllIndex = 4;
 
@@ -55,7 +58,13 @@ public:
         reset();
     }
 
-    void reset() { vc_ = 0.0; vcFast_ = 0.0; vcSlow_ = 0.0; }
+    void reset() {
+        vc_ = 0.0;
+        vcFast_ = 0.0;
+        vcSlow_ = 0.0;
+        rPeak_ = 0.0;
+        tauRelEff_ = tauRelSlow_;
+    }
 
     void setRatio(int idx) {
         idx = std::clamp(idx, 0, kNumRatios - 1);
@@ -72,7 +81,6 @@ public:
         updateBias();
     }
 
-    /** 面板 0..1（0=最慢/最小，1=最快/最大）；对数插值 */
     /**
      * 面板 0..1（**顺时针 = 更快**）
      *
@@ -84,9 +92,7 @@ public:
      *   （手册标 20–800 µs，实测 39.8–776 µs 落在同一量级）
      *
      * release 用**音频实测**：
-     *   1600 ms (n=0) → 85 ms (n=1)
-     * release 还带节目相关性：同样的旋钮，长过载的 release 更慢，
-     *   倍率 1.08（慢档）→ 3.94（快档），见 kSustainScale()。
+     *   短过载 / 长过载两套 7 点表，见 releaseTauFast/Slow()。
      */
     void setAttackRelease(double attackNorm, double releaseNorm) {
         attackNorm = std::clamp(attackNorm, 0.0, 1.0);
@@ -99,18 +105,27 @@ public:
         tauRelFast_ = releaseTauFast(releaseNorm);
         tauRelSlow_ = releaseTauSlow(releaseNorm);
         tauRel_ = tauRelSlow_;
+        tauRelEff_ = tauRelSlow_;
     }
 
     /**
      * Release 时间常数：直接查**UAD 实测表**（单位秒）
      *
-     *   旋钮     短过载(0.02 s)   中(0.5 s)   长过载(2 s)
-     *   0.00        1600 ms        1659 ms     1735 ms
-     *   0.34        1195 ms        1328 ms     1484 ms
-     *   0.67         412 ms         532 ms      800 ms
-     *   1.00          85 ms         119 ms      335 ms
+     * 2026-11-11 重测（02-release.wav，20:1 / Input 1.0 / Attack 0.67，
+     * fit_env.py 的 63% 口径，7 个旋钮点）：
      *
-     * 短过载用 fast 曲线，持续过载切到 slow 曲线 —— 这就是"节目相关性"。
+     *   旋钮      过载 0.02 s   过载 0.5 s   过载 2 s
+     *   0.00        1607 ms      1659 ms     1737 ms
+     *   0.15        1555 ms      1613 ms     1715 ms
+     *   0.34        1193 ms      1329 ms     1484 ms
+     *   0.50         793 ms       944 ms     1201 ms
+     *   0.67         412 ms       531 ms      801 ms
+     *   0.85          85 ms       119 ms      343 ms
+     *   1.00          85 ms       119 ms      337 ms
+     *
+     * ⚠️ 旧代码的 kFast 存的是 **0.5 s** 那一列（标签写成"0.02 s"），
+     *    所以模型的"最快"状态整体偏慢 ~35%（这是 fast 端一直对不上的原因之一）。
+     *    这里改成真正的 0.02 s 列；kSlow 仍是 2 s 列（原本就是对的）。
      */
     static double interpTable(const double* xs, const double* ys, int n, double x) {
         x = std::clamp(x, xs[0], xs[n-1]);
@@ -122,14 +137,13 @@ public:
 
     // UAD 实测 7 点（秒）：旋钮 0 / .15 / .34 / .50 / .67 / .85 / 1.0
     static constexpr double kN[7] = {0.00, 0.15, 0.34, 0.50, 0.67, 0.85, 1.00};
-    // 短过载（0.02 s）
-    static constexpr double kFast[7] = {1.689, 1.643, 1.349, 0.954, 0.534, 0.115, 0.114};
-    // 长过载（2 s）
-    static constexpr double kSlow[7] = {1.768, 1.745, 1.508, 1.215, 0.810, 0.343, 0.338};
+    // 短过载（0.02 s）—— fast 端
+    static constexpr double kFast[7] = {1.6074, 1.5554, 1.1925, 0.7926, 0.4115, 0.0846, 0.0846};
+    // 长过载（2 s）—— slow 端
+    static constexpr double kSlow[7] = {1.7365, 1.7151, 1.4841, 1.2012, 0.8006, 0.3434, 0.3373};
 
-    // 1.7 是"查表值 → 我们一阶 RC 实测值"的标定系数
+    // 1.52 是"查表值（63% 恢复）→ 我们内部 RC τ"的标定系数
     static constexpr double kReleaseCal = 1.52;
-
     static double releaseTauFast(double n) { return interpTable(kN, kFast, 7, n) * kReleaseCal; }
     static double releaseTauSlow(double n) { return interpTable(kN, kSlow, 7, n) * kReleaseCal; }
 
@@ -138,17 +152,20 @@ public:
         return std::max(std::abs(x) * feed_ - bias_, 0.0);
     }
 
-    /** 一阶 RC 充放电：r > vc 走 attack，否则走 release */
     /**
-     * 双电容 release（1176 节目相关性的物理来源）
+     * 双电容释放（1176 节目相关性的物理来源）
      *
-     *   C_fast：充 Attack、放 releaseFast   —— 短瞬态由它主导 → 释放快
-     *   C_slow：充慢（~120 ms）、放 releaseSlow —— 长时间压缩时它被充满 → 释放慢
+     *   C_fast：快充（attack τ）、快放（releaseFast）—— 短瞬态由它主导 → 释放快
+     *   C_slow：慢充（chargeTau，几百 ms）、慢放（releaseSlow）—— 压得久它才充满
      *   vc = max(vc_fast, vc_slow)
      *
-     * 于是同一旋钮位置下：
-     *   20 ms 过载  → 慢电容只充到 ~15%，释放由快电容决定（快）
-     *   2 s  过载  → 两个都充满，放电时慢电容拖住 → 释放慢（实测差 4 倍）
+     * 20 ms 过载 → 慢电容只充到 ~10%，释放由快电容决定（快）
+     * 2 s  过载 → 慢电容充满，放电时它拖住 → 释放慢（实测差 3–4 倍）
+     *
+     * 旧写法是"逐样本 r>0 累加 sustainSec_，r==0 时按 2× 衰减"，而 r 是
+     * 全波整流的**音频**，每个过零点都归 0；稳态压缩时 r 在一个载波周期里
+     * 大部分样本为 0，衰减比累加还快 → sustainSec_ 被反复清零 → mix≡0 →
+     * τ 恒等于 fast。这就是"三档 knob 全平、长过载反而更快"的根因。
      */
     double process(double sampleAfterGR) {
         const double r = rectify(sampleAfterGR);
@@ -157,19 +174,27 @@ public:
             return 1.0 - std::exp(-dt / std::max(tau, 1e-9));
         };
 
-        // 快电容
-        {
-            const double tau = (r > vcFast_) ? tauAtk_ : tauRelFast_;
-            vcFast_ += (r - vcFast_) * coef(tau);
-        }
-        // 慢电容（充电慢，模拟"持续压缩"的累积；放电 = releaseSlow）
-        {
-            const double tauCharge = std::max(tauAtk_ * 6.0, 0.12);
-            const double tau = (r > vcSlow_) ? tauCharge : tauRelSlow_;
-            vcSlow_ += (r - vcSlow_) * coef(tau);
-        }
+        // ⓪ 峰值检波：整流输出是音频（1 kHz 时每 0.5 ms 归零一次），
+        //    慢电容的充电目标必须是**峰值包络**，否则它只能收敛到 |sin| 的均值，
+        //    持续过载也充不满。hold ≈ 5 ms：跨得过载波周期，释放时又能很快落下。
+        if (r > rPeak_)
+            rPeak_ = r;
+        else
+            rPeak_ -= rPeak_ * coef(0.005);
 
+        // ① C_fast：r > vc 充（attack），否则放（releaseFast）
+        const double tauF = (r > vcFast_) ? tauAtk_ : tauRelFast_;
+        vcFast_ += (r - vcFast_) * coef(tauF);
+
+        // ② C_slow：慢充 / 慢放。b 秒持续过载后充到 (1−e^{−b/T})，
+        //    释放时由它拖住 —— 这就是节目相关性。
+        const double tauS = (rPeak_ > vcSlow_) ? chargeTauSec(releaseNorm_) : tauRelSlow_;
+        vcSlow_ += (rPeak_ - vcSlow_) * coef(tauS);
+
+        // ③ 取大：谁拖后腿谁决定释放
         vc_ = std::max(vcFast_, vcSlow_);
+        tauRelEff_ = (r > vc_) ? tauAtk_
+                     : (vcSlow_ >= vcFast_ ? tauRelSlow_ : tauRelFast_);
         return vc_;
     }
 
@@ -192,7 +217,15 @@ public:
 
     // ---- 观测 ----
     double tauAttack() const { return tauAtk_; }
+    double tauFastMs() const { return tauRelFast_ * 1000.0; }
+    double tauSlowMs() const { return tauRelSlow_ * 1000.0; }
     double tauRelease() const { return tauRel_; }
+    /** 释放段当前实际用的 τ（s）；attack 期间为 tauAtk_（调试用） */
+    double tauReleaseEff() const { return tauRelEff_; }
+    /** 原始控制电压（**未**经 control() 钳位/取对数，调试用） */
+    double vcRaw() const { return vc_; }
+    double vcFastRaw() const { return vcFast_; }
+    double vcSlowRaw() const { return vcSlow_; }
     int ratio() const { return ratio_; }
     double ratioTarget() const { return ratioTarget_; }
     double biasPeak() const { return bias_; }
@@ -207,16 +240,38 @@ private:
         bias_ = feed_ * std::pow(10.0, dB / 20.0);
     }
 
+    /**
+     * 慢电容的**充电**时间常数。
+     *
+     * 实测律 τ(b) = τ_fast + (τ_slow−τ_fast)·(1−e^{−b/T_trans})，
+     * T_trans = 497 / 840 / 1000 ms（release 旋钮 0.34 / 0.67 / 1.00）。
+     * 慢电容本身要比 T_trans 略快充电：最终量到的是 max(fast, slow) 的复合
+     * 释放，过渡点会被往后推，所以用插件层实测 τ(b) 反标定出 kChargeScale。
+     */
+    static constexpr double kChargeScale = 0.75;
+    static double chargeTauSec(double n)
+    {
+        static const double xs[3] = {0.34, 0.67, 1.00};
+        static const double ys[3] = {0.497, 0.840, 1.000};
+        n = std::clamp(n, xs[0], xs[2]);
+        for (int i = 1; i < 3; ++i)
+            if (n <= xs[i])
+                return kChargeScale * (ys[i-1] + (ys[i]-ys[i-1]) * (n - xs[i-1]) / (xs[i] - xs[i-1]));
+        return kChargeScale * ys[2];
+    }
+
     double sr_ = 48000.0;
     double vc_ = 0.0;
     double vcFast_ = 0.0;
     double vcSlow_ = 0.0;
+    double rPeak_ = 0.0;
     double tauRelFast_ = 1.6;
     double tauRelSlow_ = 1.735;
-    double attackNorm_ = 0.5;
     double releaseNorm_ = 0.666;
+    double attackNorm_ = 0.5;
     double tauAtk_ = kAttackMinSec;
     double tauRel_ = kReleaseMaxSec;
+    double tauRelEff_ = kReleaseMaxSec;
     int ratio_ = 0;
     double thrDb_ = kThresholdDb[0];
     double ratioTarget_ = 4.0;
