@@ -69,13 +69,14 @@ static void analyseCurve(const std::vector<LevelResult>& pts, double& thrDb, dou
             break;
         }
     }
-    double gr3 = 0.0, gr18 = 0.0;
-    bool has3 = false, has18 = false;
+    // 与测量脚本同窗口：−24 → −6 dB（18 dB 跨度）
+    double grMinus24 = 0.0, grMinus6 = 0.0;
+    bool has24 = false, has6 = false;
     for (auto& p : pts) {
-        if (std::abs(p.inDb + 3.0) < 0.01) { gr3 = p.grDb; has3 = true; }
-        if (std::abs(p.inDb + 18.0) < 0.01) { gr18 = p.grDb; has18 = true; }
+        if (std::abs(p.inDb + 24.0) < 0.6) { grMinus24 = p.grDb; has24 = true; }
+        if (std::abs(p.inDb + 6.0)  < 0.6) { grMinus6  = p.grDb; has6  = true; }
     }
-    slope = (has3 && has18) ? (gr3 - gr18) / 15.0 : 0.0;
+    slope = (has24 && has6) ? (grMinus6 - grMinus24) / 18.0 : 0.0;
     ratioEff = (slope > 0.001 && slope < 0.999) ? 1.0 / (1.0 - slope) : 0.0;
 }
 
@@ -89,7 +90,7 @@ int main(int argc, char** argv) {
     if (csv) std::fprintf(csv, "ratio,input_db,gr_db\n");
 
     std::printf("=== 1) 静态曲线（当前馈送量为占位值）===\n");
-    std::printf("%-6s %10s %8s %10s %10s\n", "ratio", "thr(-1dB)", "slope", "ratio_eff", "manual_thr");
+    std::printf("%-6s %10s %8s %10s %10s %8s\n", "ratio", "thr(-1dB)", "slope", "ratio_eff", "manual_thr", "GR@-6");
     double bestFeed[4] = {0, 0, 0, 0};
     double bestSlope[4] = {0, 0, 0, 0};
     double bestThr[4] = {0, 0, 0, 0};
@@ -115,8 +116,10 @@ int main(int argc, char** argv) {
         double thr, slope, reff;
         analyseCurve(pts, thr, slope, reff);
         bestThr[r] = thr; bestSlope[r] = slope; bestRatioEff[r] = reff;
-        std::printf("%-6s %10.2f %8.3f %10.2f %10.2f   (want_slope=%.3f)\n",
-                    ratioNames[r], thr, slope, reff, manualThrDb[r], wantSlope);
+        double grAt6 = 0.0;
+        for (auto& p : pts) if (std::abs(p.inDb + 6.0) < 0.6) grAt6 = p.grDb;
+        std::printf("%-6s %10.2f %8.3f %10.2f %10.2f %8.1f   (want=%.2f)\n",
+                    ratioNames[r], thr, slope, reff, manualThrDb[r], grAt6, wantSlope);
     }
     if (csv) std::fclose(csv);
 

@@ -37,12 +37,15 @@ public:
     static constexpr double kReleaseMinSec = 50e-3;
     static constexpr double kReleaseMaxSec = 1.1;
 
-    // 各档限幅阈值（设备输入端，dB re 满刻度正弦）【1965 p.7】
-    static constexpr double kThresholdDb[4] = {-22.0, -21.0, -20.0, -19.0};
-    static constexpr double kAllThresholdDb = -19.0;
+    // 各档限幅阈值（设备输入端 dBFS，UAD 实测 2026-11-11，Input 旋钮 0 dB）
+    static constexpr double kThresholdDb[4] = {-52.7, -50.2, -48.8, -46.8};   // 实测值再下移 2 dB 抵消模型偏置
+    static constexpr double kAllThresholdDb = -50.2;
 
-    // 目标压缩比（ALL 由 UA 只给 12:1–20:1 区间，先取 18）
-    static constexpr double kTargetRatio[5] = {4.0, 8.0, 12.0, 20.0, 18.0};
+    // 目标压缩比：**实测等效值**（真机比面板标称更陡，1176 的已知特性）
+    // 注意：这里存的是控制律参数，不是面板标称 ratio。
+    // 反馈式模型对同一参数会放大 1.8 倍左右，所以用实测等效比除以 1.8 反推：
+    //   实测 5.9/10.6/16.4/30/28.6  →  参数 3.2/5.8/9.0/16.5/15.7
+    static constexpr double kTargetRatio[5] = {3.2, 5.8, 9.0, 16.5, 15.7};
 
     // FET 可用行程（dB）：从静态 1 dB 到满控制约 29 dB
     static constexpr double kFetSpanDb = 29.0;
@@ -52,7 +55,7 @@ public:
         reset();
     }
 
-    void reset() { vc_ = 0.0; }
+    void reset() { vc_ = 0.0; sustain_ = 0.0; }
 
     void setRatio(int idx) {
         idx = std::clamp(idx, 0, kNumRatios - 1);
@@ -70,11 +73,31 @@ public:
     }
 
     /** 面板 0..1（0=最慢/最小，1=最快/最大）；对数插值 */
+    /**
+     * 面板 0..1（**顺时针 = 更快**，与手册 "clockwise fastest" 一致）
+     *   attack : 800 µs (n=0) → 20 µs (n=1)      【手册 20–800 µs】
+     *   release: 1600 ms (n=0) → 85 ms (n=1)      【UAD 实测 1735 / 85 ms】
+     * release 还带节目相关性：同样的旋钮，长过载的 release 更慢，
+     *   倍率 1.08（慢档）→ 3.94（快档），见 kSustainScale()。
+     */
     void setAttackRelease(double attackNorm, double releaseNorm) {
         attackNorm = std::clamp(attackNorm, 0.0, 1.0);
         releaseNorm = std::clamp(releaseNorm, 0.0, 1.0);
-        tauAtk_ = kAttackMinSec * std::pow(kAttackMaxSec / kAttackMinSec, attackNorm);
-        tauRel_ = kReleaseMinSec * std::pow(kReleaseMaxSec / kReleaseMinSec, releaseNorm);
+        attackNorm_ = attackNorm;
+        releaseNorm_ = releaseNorm;
+        tauAtk_ = kAttackMaxSec * std::pow(kAttackMinSec / kAttackMaxSec, attackNorm);
+        tauRelFast_ = 0.085 * std::pow(1.60 / 0.085, 1.0 - releaseNorm);
+        tauRel_ = tauRelFast_ * sustainScale(releaseNorm);
+    }
+
+    /** 节目相关性倍率：长过载 → release 变慢（实测 1.08 / 1.24 / 1.94 / 3.94） */
+    static double sustainScale(double n) {
+        static const double xs[4] = {0.00, 0.34, 0.67, 1.00};
+        static const double ys[4] = {1.08, 1.24, 1.94, 3.94};
+        for (int i = 1; i < 4; ++i)
+            if (n <= xs[i])
+                return ys[i-1] + (ys[i]-ys[i-1]) * (n - xs[i-1]) / (xs[i]-xs[i-1]);
+        return ys[3];
     }
 
     /** 全波整流 + 二极管偏置（偏置已含输入衰减补偿） */
@@ -86,7 +109,16 @@ public:
     double process(double sampleAfterGR) {
         const double r = rectify(sampleAfterGR);
         const double dt = 1.0 / sr_;
-        const double tau = (r > vc_) ? tauAtk_ : tauRel_;
+
+        // 过载持续性探测：慢跟随器（≈300 ms），用来判断"这次是短瞬态还是长时间压"
+        const double sustainAlpha = 1.0 - std::exp(-dt / 0.3);
+        sustain_ += (r - sustain_) * sustainAlpha;
+
+        // 持续过载 → 用慢 release；短瞬态 → 用快 release
+        const bool sustained = sustain_ > 0.5 * std::max(vc_, 1e-9);
+        const double tauRel = sustained ? tauRel_ : tauRelFast_;
+        const double tau = (r > vc_) ? tauAtk_ : tauRel;
+
         const double alpha = 1.0 - std::exp(-dt / std::max(tau, 1e-9));
         vc_ += (r - vc_) * alpha;
         return vc_;
@@ -126,6 +158,10 @@ private:
 
     double sr_ = 48000.0;
     double vc_ = 0.0;
+    double sustain_ = 0.0;
+    double tauRelFast_ = 0.085;
+    double attackNorm_ = 0.5;
+    double releaseNorm_ = 0.666;
     double tauAtk_ = kAttackMinSec;
     double tauRel_ = kReleaseMinSec;
     int ratio_ = 0;
