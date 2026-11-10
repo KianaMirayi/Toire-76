@@ -2,6 +2,8 @@
 
 #include <JuceHeader.h>
 
+#include <juce_dsp/juce_dsp.h>
+
 #include "dsp/Compressor76.h"
 
 /**
@@ -68,6 +70,14 @@ private:
     std::atomic<float>* bypassParam  = nullptr;
 
     toire76::Compressor76 compressor;
+
+    /** 4× 过采样（内部 FSR ~192 kHz）。倍数按宿主采样率选，使延迟时间与参考一致。 */
+    std::unique_ptr<juce::dsp::Oversampling<float>> oversampler;
+    juce::AudioBuffer<float> oversampledBuffer;
+
+    /** 把总延迟补到参考值（48 kHz 下 86 samples），便于逐样本对齐比较 */
+    std::unique_ptr<juce::dsp::DelayLine<float>> extraDelay;
+    int latencySamples = 0;
 
     /** 面板归一化值 → 物理量（taper 待实测替换，见 docs/DSP-电路映射.md §二 #1/#8） */
     static double inputNormToDb  (float norm);
