@@ -55,7 +55,7 @@ public:
         reset();
     }
 
-    void reset() { vc_ = 0.0; sustain_ = 0.0; }
+    void reset() { vc_ = 0.0; vcFast_ = 0.0; vcSlow_ = 0.0; }
 
     void setRatio(int idx) {
         idx = std::clamp(idx, 0, kNumRatios - 1);
@@ -112,25 +112,26 @@ public:
      *
      * 短过载用 fast 曲线，持续过载切到 slow 曲线 —— 这就是"节目相关性"。
      */
-    static double interp4(const double ys[4], double n) {
-        static const double xs[4] = {0.00, 0.34, 0.67, 1.00};
-        n = std::clamp(n, 0.0, 1.0);
-        for (int i = 1; i < 4; ++i)
-            if (n <= xs[i])
-                return ys[i-1] + (ys[i]-ys[i-1]) * (n - xs[i-1]) / (xs[i]-xs[i-1]);
-        return ys[3];
+    static double interpTable(const double* xs, const double* ys, int n, double x) {
+        x = std::clamp(x, xs[0], xs[n-1]);
+        for (int i = 1; i < n; ++i)
+            if (x <= xs[i])
+                return ys[i-1] + (ys[i]-ys[i-1]) * (x - xs[i-1]) / (xs[i] - xs[i-1]);
+        return ys[n-1];
     }
-    // 1.7 是"模型 → 插件实测"的标定系数：我们的 RC 一阶在闭环里衰减慢一档，
-    // 逐档对比后实测比值稳定在 ~1.7（见 measure/renders/charts/cmp_release.png）
-    static constexpr double kReleaseCal = 1.7;
-    static double releaseTauFast(double n) {
-        static const double ys[4] = {1.600, 1.195, 0.412, 0.085};
-        return interp4(ys, n) * kReleaseCal;
-    }
-    static double releaseTauSlow(double n) {
-        static const double ys[4] = {1.735, 1.484, 0.800, 0.335};
-        return interp4(ys, n) * kReleaseCal;
-    }
+
+    // UAD 实测 7 点（秒）：旋钮 0 / .15 / .34 / .50 / .67 / .85 / 1.0
+    static constexpr double kN[7] = {0.00, 0.15, 0.34, 0.50, 0.67, 0.85, 1.00};
+    // 短过载（0.02 s）
+    static constexpr double kFast[7] = {1.689, 1.643, 1.349, 0.954, 0.534, 0.115, 0.114};
+    // 长过载（2 s）
+    static constexpr double kSlow[7] = {1.768, 1.745, 1.508, 1.215, 0.810, 0.343, 0.338};
+
+    // 1.7 是"查表值 → 我们一阶 RC 实测值"的标定系数
+    static constexpr double kReleaseCal = 1.52;
+
+    static double releaseTauFast(double n) { return interpTable(kN, kFast, 7, n) * kReleaseCal; }
+    static double releaseTauSlow(double n) { return interpTable(kN, kSlow, 7, n) * kReleaseCal; }
 
     /** 全波整流 + 二极管偏置（偏置已含输入衰减补偿） */
     double rectify(double x) const {
@@ -138,20 +139,37 @@ public:
     }
 
     /** 一阶 RC 充放电：r > vc 走 attack，否则走 release */
+    /**
+     * 双电容 release（1176 节目相关性的物理来源）
+     *
+     *   C_fast：充 Attack、放 releaseFast   —— 短瞬态由它主导 → 释放快
+     *   C_slow：充慢（~120 ms）、放 releaseSlow —— 长时间压缩时它被充满 → 释放慢
+     *   vc = max(vc_fast, vc_slow)
+     *
+     * 于是同一旋钮位置下：
+     *   20 ms 过载  → 慢电容只充到 ~15%，释放由快电容决定（快）
+     *   2 s  过载  → 两个都充满，放电时慢电容拖住 → 释放慢（实测差 4 倍）
+     */
     double process(double sampleAfterGR) {
         const double r = rectify(sampleAfterGR);
         const double dt = 1.0 / sr_;
+        const auto coef = [dt](double tau) {
+            return 1.0 - std::exp(-dt / std::max(tau, 1e-9));
+        };
 
-        // 过载持续性探测：200 ms 慢跟随器（回退版：30 ms 计数版会让 release 整体变快，
-        // 与实测差太多；节目相关性留待用双电容结构重做）
-        const double sustainAlpha = 1.0 - std::exp(-dt / 0.2);
-        sustain_ += (r - sustain_) * sustainAlpha;
-        const bool sustained = sustain_ > 0.6 * std::max(vc_, 1e-9);
-        const double tauRel = sustained ? tauRelSlow_ : tauRelFast_;
-        const double tau = (r > vc_) ? tauAtk_ : tauRel;
+        // 快电容
+        {
+            const double tau = (r > vcFast_) ? tauAtk_ : tauRelFast_;
+            vcFast_ += (r - vcFast_) * coef(tau);
+        }
+        // 慢电容（充电慢，模拟"持续压缩"的累积；放电 = releaseSlow）
+        {
+            const double tauCharge = std::max(tauAtk_ * 6.0, 0.12);
+            const double tau = (r > vcSlow_) ? tauCharge : tauRelSlow_;
+            vcSlow_ += (r - vcSlow_) * coef(tau);
+        }
 
-        const double alpha = 1.0 - std::exp(-dt / std::max(tau, 1e-9));
-        vc_ += (r - vc_) * alpha;
+        vc_ = std::max(vcFast_, vcSlow_);
         return vc_;
     }
 
@@ -191,7 +209,8 @@ private:
 
     double sr_ = 48000.0;
     double vc_ = 0.0;
-    double sustain_ = 0.0;
+    double vcFast_ = 0.0;
+    double vcSlow_ = 0.0;
     double tauRelFast_ = 1.6;
     double tauRelSlow_ = 1.735;
     double attackNorm_ = 0.5;
