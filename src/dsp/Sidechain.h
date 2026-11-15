@@ -67,7 +67,7 @@ public:
 
     // 瞬态检测：输入峰值比慢包络高多少 dB 算"新音头"
     //   实测鼓组音头的跳变在 10–25 dB，取 6 dB 既能覆盖弱击打又不会被稳态波动误触发
-    static constexpr double kTransientDb = 6.0;
+    static constexpr double kTransientDb = 20.0;
     static constexpr double kInSlowTauSec = 0.20;
 
     // 武装条件：静音期间 GR 至少掉了这么多（u 单位，≈ 2 dB）
