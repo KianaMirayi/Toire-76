@@ -65,6 +65,11 @@ public:
     // 必须 >= 最慢的 τ_atk（3 ms），留 5 倍余量。
     static constexpr double kAtkWindowSec = 0.015;
 
+    // 瞬态检测：输入峰值比慢包络高多少 dB 算"新音头"
+    //   实测鼓组音头的跳变在 10–25 dB，取 6 dB 既能覆盖弱击打又不会被稳态波动误触发
+    static constexpr double kTransientDb = 6.0;
+    static constexpr double kInSlowTauSec = 0.20;
+
     // 武装条件：静音期间 GR 至少掉了这么多（u 单位，≈ 2 dB）
     static constexpr double kAtkArmDrop = 0.05;
 
@@ -87,6 +92,7 @@ public:
         vcSlow_ = 0.0;
         rPeak_ = 0.0;
         inPeak_ = 0.0;
+        inSlowEnv_ = 0.0;
         atkT_ = 1e9;           // 复位后不武装 attack（等下一次真静音）
         inSilence_ = true;
         atkArmed_ = false;
@@ -257,6 +263,22 @@ public:
         else
             rPeak_ -= rPeak_ * coef(0.005);
 
+        // ⓪b 输入慢包络（~200 ms）与瞬态检测
+        //    真实素材里没有"真静音"，音头之间的间隙只是电平回落；
+        //    若只在真静音后武装 attack，连续演奏时 attack 永远不生效
+        //    （实测：小军鼓素材 4 档 attack 的 crest 完全不动，差 4 dB）。
+        //    改为：输入峰值比慢包络高出 kTransientDb 就认为是新音头 → 武装。
+        {
+            const double aSlow = coef(kInSlowTauSec);
+            inSlowEnv_ += (inPeak_ - inSlowEnv_) * aSlow;
+            const double jumpDb = 20.0 * std::log10(std::max(inPeak_, 1e-12) /
+                                                   std::max(inSlowEnv_, 1e-12));
+            if (jumpDb > kTransientDb && inPeak_ > silThr_) {
+                atkArmed_ = true;
+                atkT_ = 0.0;
+            }
+        }
+
         // ① C_fast：r > vc 充（attack），否则放（releaseFast）
         //    ⚠️ 这里充的是**探测器**（峰值检波），用固定的检测 τ，不是面板 attack。
         //    面板 attack 作用在"控制量"上（见 control()）：如果把面板 τ 也塞进
@@ -399,7 +421,8 @@ private:
     double vcFast_ = 0.0;
     double vcSlow_ = 0.0;
     double rPeak_ = 0.0;
-    double inPeak_ = 0.0;        // 压缩**之前**的峰值包络（判静音用）
+    double inPeak_ = 0.0;
+    double inSlowEnv_ = 0.0;   // 输入电平的慢包络（~200 ms），用来做瞬态检测        // 压缩**之前**的峰值包络（判静音用）
     double tauRelFast_ = 1.6;
     double tauRelSlow_ = 1.735;
     double releaseNorm_ = 0.666;
