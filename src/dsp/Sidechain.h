@@ -30,6 +30,8 @@ class Sidechain {
 public:
     // release 模型的标识（dsp_test 会打印，用来确认跑的是新编译产物）
     static constexpr const char* kReleaseModel = "dual-cap-v3";
+    // attack 控制律的标识（同上；改映射/平滑时同步改，用来确认二进制是哪一版）
+    static constexpr const char* kAttackModel = "gr-attack-v2";
 
     static constexpr int kNumRatios = 5;   // 4:1 / 8:1 / 12:1 / 20:1 / ALL
     static constexpr int kAllIndex = 4;
@@ -53,6 +55,27 @@ public:
     // FET 可用行程（dB）：从静态 1 dB 到满控制约 29 dB
     static constexpr double kFetSpanDb = 29.0;
 
+    // 判定"真静音"的门限：**相对阈值**取 20 dB 以下（0.1·bias）。
+    // 用绝对门限（如 −120 dBFS）在真实素材上会被 −80 dBFS 的本底噪声顶住，
+    // 永远进不了静音态 —— 那样 350 ms 的空隙也放不下来，attack 又会失效。
+    // 用相对门限则与输入衰减自动一致：比阈值低 20 dB 就是"没有信号可压"。
+    static constexpr double kSilenceRel = 0.1;
+
+    // attack 窗口（s）：出真静音后，慢 attack 只在这段时间内武装。
+    // 必须 >= 最慢的 τ_atk（3 ms），留 5 倍余量。
+    static constexpr double kAtkWindowSec = 0.015;
+
+    // 武装条件：静音期间 GR 至少掉了这么多（u 单位，≈ 2 dB）
+    static constexpr double kAtkArmDrop = 0.05;
+
+    // 探测器（峰值检波）自身的充电 τ（s）：检测器带宽，不是面板 attack。
+    // 27.8 µs 沿用旧映射里标定过的值 —— 静态曲线的抖动占空比就建立在这个数上。
+    static constexpr double kDetectTau = 27.8e-6;
+
+    // 真静音回落 τ 的标定系数（乘在 release 的 fast 端上）。
+    // 依据见 control() 注释；数值由 §7 的过冲量实测反推，见 setAttackRelease()。
+    static constexpr double kGrSilenceCal = 1.38;
+
     void prepare(double sampleRate) {
         sr_ = sampleRate;
         reset();
@@ -63,6 +86,12 @@ public:
         vcFast_ = 0.0;
         vcSlow_ = 0.0;
         rPeak_ = 0.0;
+        inPeak_ = 0.0;
+        atkT_ = 1e9;           // 复位后不武装 attack（等下一次真静音）
+        inSilence_ = true;
+        atkArmed_ = false;
+        uSilenceStart_ = 0.0;
+        uPrev_ = 0.0;          // 控制量也要归零，否则 reset 后残留上一段的 GR
         tauRelEff_ = tauRelSlow_;
     }
 
@@ -84,28 +113,59 @@ public:
     /**
      * 面板 0..1（**顺时针 = 更快**）
      *
-     * attack 用**逆向出来的映射**（比测量更可靠）：
-     *   UADx 的 algo 里有一张 130×8 的系数表（decrypted.dll @ 0x18143cf70），
-     *   索引参数 col7 ∈ [1.60, 2.89] 步进 0.01，正是 log10(attack 微秒)：
-     *       10^1.60 =  39.8 µs      10^2.89 = 776 µs
-     *   所以：param = 1.60 + knob × 1.29，tau = 10^param (µs)。
-     *   （手册标 20–800 µs，实测 39.8–776 µs 落在同一量级）
+     * ── attack：用「过冲量」整条重标（2026-11-16，192 kHz / 10 kHz 硬切音头）──
      *
-     * release 用**音频实测**：
-     *   短过载 / 长过载两套 7 点表，见 releaseTauFast/Slow()。
+     * 为什么推翻旧映射（28/28/27/15 µs）：旧值是"GR 包络 10–90% 上升时间"量出来
+     * 的，但那个量法在 GR 已经贴地时量到的是**环路抖动重闭合**的速度，不是 attack
+     * 本身。换成"过冲量"这把尺子后，4 档旋钮才第一次拉开差距。
+     *
+     * 标定方法（与 UADx 完全同一把尺子，脚本 tools: overshoot192.py）：
+     *   192 kHz、10 kHz 硬切音头 ×6、20:1、Input 1.0、Release 0.666；
+     *   env = |x| 的 5 点滑动平均；音头 t0 的
+     *     peak   = max    env[t0,      t0+15ms]
+     *     steady = median env[t0+50ms, t0+90ms]
+     *     overshoot = 20·log10(peak/steady)
+     *   注意：这个尺子对**线性**信号本身就有 +3.0 dB 底数（10 kHz@192k 的 MA ripple），
+     *   所以 "3.0 dB" 意味着"和干信号一模一样/完全没过冲"。
+     *
+     * 参考插件（同一把尺子，6 个音头的中位数）：
+     *     knob   0.00   0.34   0.67   1.00
+     *     UADx  19.32  18.74  16.92   8.76
+     *     我们  19.31  18.62  16.83   8.66   ← 2026-11-16 标定结果（误差 ≤ 0.12 dB）
+     *
+     * 形状为什么是"前平后陡"：10 kHz 的半周期 = 50 µs。旋钮 0/.34/.67 的 τ 都还
+     * 远慢于半周期，音头第一个峰基本原样通过，过冲 ≈ 释放后残留的 GR 深度；
+     * 到了 1.00 档，τ 已经快过半周期，峰被压掉一半 → 8.8 dB 的峭壁。
+     * 这也解释了为什么 1.00 档的 τ 必须是**几十 µs**（真实 1176 面板标称的
+     * 最快端就是 20 µs），而 0.00 档要 ~3 ms（参考插件的实测行为）。
+     *
+     * 表内按 log(tau) 插值：τ 跨 300 倍，线性插值会把 .67 档推得太快。
+     *
+     * release 用**音频实测**：短过载 / 长过载两套 7 点表，见 releaseTauFast/Slow()。
      */
     void setAttackRelease(double attackNorm, double releaseNorm) {
         attackNorm = std::clamp(attackNorm, 0.0, 1.0);
         releaseNorm = std::clamp(releaseNorm, 0.0, 1.0);
         attackNorm_ = attackNorm;
         releaseNorm_ = releaseNorm;
-        // 逆向映射：log10(µs) = 1.60 + knob × 1.29
-        const double log10us = 1.60 + attackNorm * 1.29;
-        tauAtk_ = std::pow(10.0, log10us) * 1e-6;
+        // 过冲量标定表：knob → τ_attack（µs）
+        static const double ax[4] = {0.00, 0.34, 0.67, 1.00};
+        static const double ay[4] = {3000.0, 317.0, 88.0, 10.0};
+        double lus = std::log(ay[3]);
+        for (int i = 1; i < 4; ++i)
+            if (attackNorm <= ax[i]) {
+                lus = std::log(ay[i-1]) + (std::log(ay[i])-std::log(ay[i-1]))
+                      * (attackNorm - ax[i-1]) / (ax[i] - ax[i-1]);
+                break;
+            }
+        tauAtk_ = std::exp(lus) * 1e-6;
         tauRelFast_ = releaseTauFast(releaseNorm);
         tauRelSlow_ = releaseTauSlow(releaseNorm);
         tauRel_ = tauRelSlow_;
         tauRelEff_ = tauRelSlow_;
+        // 真静音时 GR 的回落 τ（秒）：探测器电容自己放电，**不再**乘 (R−1)。
+        // 取 release 的 fast 端乘标定系数 kGrSilenceCal（见 control() 的注释）。
+        tauGrRel_ = tauRelFast_ * kGrSilenceCal;
     }
 
     /**
@@ -155,7 +215,7 @@ public:
     /**
      * 双电容释放（1176 节目相关性的物理来源）
      *
-     *   C_fast：快充（attack τ）、快放（releaseFast）—— 短瞬态由它主导 → 释放快
+     *   C_fast：快充（探测器 τ = kDetectTau）、快放（releaseFast）—— 短瞬态由它主导 → 释放快
      *   C_slow：慢充（chargeTau，几百 ms）、慢放（releaseSlow）—— 压得久它才充满
      *   vc = max(vc_fast, vc_slow)
      *
@@ -167,12 +227,27 @@ public:
      * 大部分样本为 0，衰减比累加还快 → sustainSec_ 被反复清零 → mix≡0 →
      * τ 恒等于 fast。这就是"三档 knob 全平、长过载反而更快"的根因。
      */
-    double process(double sampleAfterGR) {
+    /**
+     * @param sampleAfterGR  压缩之后的样本（反馈取样点）
+     * @param inputLevel     压缩**之前**的 |x|（可选；只用来看"信号还在不在"）
+     *
+     * 为什么需要 inputLevel：判断"真静音"不能用压缩之后的电平 —— 低电平信号
+     * 被压到阈值以下时，压缩后的整流值本来就恒为 0，那会误判成静音，把 GR 慢慢
+     * 放掉（静态曲线在低电平段被抬高 8 dB，实测过）。只有压缩前的电平才知道
+     * "信号到底还在不在"。
+     */
+    double process(double sampleAfterGR, double inputLevel = 0.0) {
         const double r = rectify(sampleAfterGR);
         const double dt = 1.0 / sr_;
         const auto coef = [dt](double tau) {
             return 1.0 - std::exp(-dt / std::max(tau, 1e-9));
         };
+
+        // 输入侧的峰值包络（40 ms 量级的保持）：只用来判静音
+        if (inputLevel > inPeak_)
+            inPeak_ = inputLevel;
+        else
+            inPeak_ -= inPeak_ * coef(0.005);
 
         // ⓪ 峰值检波：整流输出是音频（1 kHz 时每 0.5 ms 归零一次），
         //    慢电容的充电目标必须是**峰值包络**，否则它只能收敛到 |sin| 的均值，
@@ -183,7 +258,11 @@ public:
             rPeak_ -= rPeak_ * coef(0.005);
 
         // ① C_fast：r > vc 充（attack），否则放（releaseFast）
-        const double tauF = (r > vcFast_) ? tauAtk_ : tauRelFast_;
+        //    ⚠️ 这里充的是**探测器**（峰值检波），用固定的检测 τ，不是面板 attack。
+        //    面板 attack 作用在"控制量"上（见 control()）：如果把面板 τ 也塞进
+        //    这个电容，等于改掉环路的抖动占空比，静态曲线会跟着变（实测 20:1 的
+        //    等效比从 16 掉到 1.9）。两者是两个物理环节，不能共用一个 τ。
+        const double tauF = (r > vcFast_) ? kDetectTau : tauRelFast_;
         vcFast_ += (r - vcFast_) * coef(tauF);
 
         // ② C_slow：慢充 / 慢放。b 秒持续过载后充到 (1−e^{−b/T})，
@@ -195,6 +274,22 @@ public:
         vc_ = std::max(vcFast_, vcSlow_);
         tauRelEff_ = (r > vc_) ? tauAtk_
                      : (vcSlow_ >= vcFast_ ? tauRelSlow_ : tauRelFast_);
+
+        // ④ attack 武装（见 control() 的长注释）：
+        //    只有"上一个音确实释放掉了"（静音期间 u 掉了 > kAtkArmDrop）才武装。
+        //    这样连着响的稳态信号（静态曲线/释放标定的测量条件）永远不会被武装，
+        //    循环与 HEAD 逐位一致；而 350 ms 空隙之后的那个音头会被武装。
+        if (inPeak_ < silThr_) {
+            if (!inSilence_) { inSilence_ = true; uSilenceStart_ = uPrev_; }
+        } else {
+            if (inSilence_) {
+                inSilence_ = false;
+                atkArmed_ = (uSilenceStart_ - uPrev_) > kAtkArmDrop;
+                atkT_ = 0.0;
+            } else {
+                atkT_ += dt;
+            }
+        }
         return vc_;
     }
 
@@ -207,12 +302,48 @@ public:
      *
      * 为什么是 (R−1) 不是 (1−1/R)：反馈式里检测器看到的是**输出**，
      * 设 dy/dx = 1/R 需要 f'(y) = R−1；用 (1−1/R) 会塌成 1/(2−1/R)。
+     *
+     * ⚠️ 这里有一个**环路增益陷阱**，2026-11-16 定位：
+     *   bias 只有 −46.8 dBFS（0.0046），而侧链在音头里看到的是 0.4 量级，
+     *   (R−1)=15.5 倍放大后需求是 300+ dB，而 FET 的总行程只有 38 dB ——
+     *   于是 uTarget **恒等于 1**（轨顶）。而 release（0.6–1.2 s）在 350 ms 的
+     *   空隙里只让 vc 掉 4.8 dB，需求仍在轨顶。结果：**下一个音头到达时 GR 已经
+     *   贴在 FET 地板（38.19 dB），attack 的 τ 无论调成多少都没有行程可走**。
+     *
+     *   修法（不改静态曲线，见 tests/dsp_test.cpp §7 的证据）：
+     *     · 出静音后的上升沿：一阶趋向 uTarget，τ = τ_atk（旋钮真的在这里起作用）
+     *     · 稳态 / 下降沿：跟随 uTarget（与 HEAD 逐位一致，静态与 release 标定不变）
+     *     · **真静音**（inPeak_ → 0，按**压缩前**电平判，不是载波过零）：
+     *       让 u 按 τ_gr 回落到 0。这一支对应"电容自己通过 R56 放电"，
+     *       在 dB 域是 1:1 的；而上面的需求式是**小信号伺服线性化**，
+     *       无信号时它会把释放放大 15.5 倍（一个空隙就把 GR 放到底）。
+     *
+     * ⚠️ 第二条陷阱（2026-11-16 实测）：慢 attack **只在"释放 → 再触发"**
+     *   这个过渡上生效，不能用在整个稳态。原因：uTarget 在轨顶时环路是
+     *   bang-bang，静态比正是靠这个抖动的占空比堆出来的 —— 把 τ_atk 全局改慢
+     *   会直接改掉静态曲线（实测 20:1 的等效比从 16 掉到 1.9）。
+     *   而"稳态里电平涨一点"本来也不可能有 attack：GR 已经贴在轨顶，
+     *   没有行程。真正存在 attack 行程的只有"放完再打回来"的这一刻，
+     *   所以慢 attack 只在**上一次确实释放过**之后才武装（atkArmed_），
+     *   窗口长度 kAtkWindowSec（atkT_ 在 process() 里维护）。
      */
-    double control(double vc) const {
+    double control(double vc) {
         if (vc <= 1e-12) return 0.0;
         const double dBabove = 20.0 * std::log10(1.0 + vc / std::max(bias_, 1e-12));
         const double grTarget = (ratioTarget_ - 1.0) * dBabove;
-        return std::clamp(grTarget / kFetSpanDb, 0.0, 1.0);
+        const double uTarget = std::clamp(grTarget / kFetSpanDb, 0.0, 1.0);
+        const double dt = 1.0 / std::max(sr_, 1.0);
+
+        if (inPeak_ < silThr_) {
+            // 真静音：GR 按探测器电容的自然放电回落
+            uPrev_ += (0.0 - uPrev_) * (1.0 - std::exp(-dt / std::max(tauGrRel_, 1e-9)));
+        } else if (atkArmed_ && atkT_ < kAtkWindowSec && uTarget > uPrev_) {
+            // 出静音后的头一段（attack 窗口）：慢 attack 只在这里
+            uPrev_ += (uTarget - uPrev_) * (1.0 - std::exp(-dt / std::max(tauAtk_, 1e-9)));
+        } else {
+            uPrev_ = uTarget;   // 稳态：与 HEAD 完全一致（无平滑），静态/释放标定不变
+        }
+        return uPrev_;
     }
 
     // ---- 观测 ----
@@ -222,6 +353,8 @@ public:
     double tauRelease() const { return tauRel_; }
     /** 释放段当前实际用的 τ（s）；attack 期间为 tauAtk_（调试用） */
     double tauReleaseEff() const { return tauRelEff_; }
+    /** 真静音时 GR 状态的回落 τ（s） */
+    double tauGrRelease() const { return tauGrRel_; }
     /** 原始控制电压（**未**经 control() 钳位/取对数，调试用） */
     double vcRaw() const { return vc_; }
     double vcFastRaw() const { return vcFast_; }
@@ -238,6 +371,7 @@ private:
         // 输入衰减会自动把"触发所需输入电平"抬高，不需要再补偿一次
         const double dB = thrDb_;
         bias_ = feed_ * std::pow(10.0, dB / 20.0);
+        silThr_ = kSilenceRel * bias_;
     }
 
     /**
@@ -265,19 +399,27 @@ private:
     double vcFast_ = 0.0;
     double vcSlow_ = 0.0;
     double rPeak_ = 0.0;
+    double inPeak_ = 0.0;        // 压缩**之前**的峰值包络（判静音用）
     double tauRelFast_ = 1.6;
     double tauRelSlow_ = 1.735;
     double releaseNorm_ = 0.666;
     double attackNorm_ = 0.5;
     double tauAtk_ = kAttackMinSec;
+    double uPrev_ = 0.0;
     double tauRel_ = kReleaseMaxSec;
     double tauRelEff_ = kReleaseMaxSec;
+    double tauGrRel_ = 0.6;      // 真静音时 GR 的回落 τ（s）
+    double atkT_ = 1e9;          // 距"出静音"过去多久（s）；>= 窗口即不武装
+    bool   inSilence_ = true;    // 当前是否处于真静音
+    bool   atkArmed_ = false;    // 本次"出静音"是否武装慢 attack
+    double uSilenceStart_ = 0.0; // 进入静音那一刻的 u（判"释放真的发生过"）
     int ratio_ = 0;
     double thrDb_ = kThresholdDb[0];
     double ratioTarget_ = 4.0;
     double attenDb_ = 0.0;
     double feed_ = 1.0;
     double bias_ = 0.1;
+    double silThr_ = 0.01;       // 真静音门限（= kSilenceRel · bias_）
 };
 
 } // namespace toire76

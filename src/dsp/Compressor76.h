@@ -66,7 +66,7 @@ public:
         const double g = fet_.gain(vcPrev_);
         const double yGr = xin * g;
 
-        const double vc = side_.process(yGr);
+        const double vc = side_.process(yGr, std::abs(xin));
         vcPrev_ = side_.control(vc);
 
         return softClip(yGr * preampGain_ * outputGain_);
@@ -84,7 +84,7 @@ public:
 
         // 侧链输入取两声道峰值的较大者（整流器内部取绝对值）
         const double sc = std::max(std::abs(yl), std::abs(yr));
-        const double vc = side_.process(sc);
+        const double vc = side_.process(sc, std::max(std::abs(xl), std::abs(xr)));
         vcPrev_ = side_.control(vc);
 
         const double make = preampGain_ * outputGain_;

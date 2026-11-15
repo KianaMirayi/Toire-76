@@ -357,6 +357,205 @@ int main(int argc, char** argv) {
         }
     }
 
+    // ══════════════════════════════════════════════════════════════════
+    //  7) attack 过冲量（192 kHz / 10 kHz 硬切音头）—— 与参考插件同尺子
+    //
+    //  信号 = 11-attack192k.wav 同构：0.35 s 静音 + 6 ×（0.1 s 10 kHz
+    //         −6 dBFS + 0.35 s 静音）。插件在 192k 走 factorLog2=0（不升频），
+    //         所以这里直接按 192k 准备模型。
+    //  量法 = 外部脚本同款：
+    //           env  = |x| 的 5 点滑动平均
+    //           音头 t0：peak   = max  env[t0, t0+15ms]
+    //                    steady = median env[t0+50ms, t0+90ms]
+    //                    overshoot = 20·log10(peak/steady)
+    //  注意：这个尺子对**线性**信号本身就有 +3.0 dB 底数（10 kHz@192k 时
+    //        5 点 MA 的 ripple），所以 "ours=3.0" = "和干信号一模一样"，
+    //        也就是**过冲完全没被压掉**。
+    //  参考（UADx，同一把尺子）：knob 0→19.3 / .34→18.7 / .67→16.9 / 1.0→8.8 dB
+    // ══════════════════════════════════════════════════════════════════
+    {
+        std::printf("\n=== 7) attack 过冲量（192k / 10 kHz 音头，UAD 同尺子）===\n");
+        std::printf("  attack model: %s\n", Sidechain::kAttackModel);
+
+        const double kA = 192000.0;
+        const double dPre = 0.35, dBurst = 0.10, dGap = 0.35;
+        const int nPre = int(dPre * kA), nB = int(dBurst * kA), nG = int(dGap * kA);
+        const int nTot = nPre + 6 * (nB + nG);
+
+        std::vector<double> sig(size_t(nTot), 0.0);
+        const double amp = dbToLin(-6.0);
+        for (int k = 0; k < 6; ++k) {
+            const int i0 = nPre + k * (nB + nG);
+            for (int i = 0; i < nB; ++i)
+                sig[size_t(i0 + i)] = amp * std::sin(2.0 * M_PI * 10000.0 * i / kA);
+        }
+
+        auto env5 = [](const std::vector<double>& x) {
+            std::vector<double> e(x.size(), 0.0);
+            for (size_t i = 0; i < x.size(); ++i) {
+                double s = 0.0; int c = 0;
+                for (int d = -2; d <= 2; ++d) {
+                    const long j = long(i) + d;
+                    if (j >= 0 && j < long(x.size())) { s += std::abs(x[size_t(j)]); ++c; }
+                }
+                e[i] = s / std::max(c, 1);
+            }
+            return e;
+        };
+        auto median = [](std::vector<double> v) {
+            if (v.empty()) return 0.0;
+            std::sort(v.begin(), v.end());
+            const size_t n = v.size();
+            return (n % 2) ? v[n / 2] : 0.5 * (v[n / 2 - 1] + v[n / 2]);
+        };
+
+        const std::vector<double> eIn = env5(sig);
+        const double knobs[4] = {0.00, 0.34, 0.67, 1.00};
+        const double uadOs[4] = {19.32, 18.74, 16.92, 8.76};
+
+        std::printf("  %-5s %9s %9s %9s %9s | %-7s | %s\n",
+                    "knob", "tau_atk", "peak_dB", "sted_dB", "oversht", "UAD", "per-onset (dB)");
+        for (int ki = 0; ki < 4; ++ki) {
+            Compressor76 c;
+            c.setInputDb(0.0);
+            c.setOutputDb(-12.90);          // = PluginProcessor::outputNormToDb(0.6259)
+            c.setRatioIndex(3);             // 20:1（--param 4=0.75）
+            c.setReleaseNorm(0.666);
+            c.setAttackNorm(knobs[ki]);
+            c.prepare(kA);
+            c.reset();
+
+            std::vector<double> out(size_t(nTot), 0.0);
+            for (int i = 0; i < nTot; ++i) {
+                double l = sig[size_t(i)], r = l;
+                c.processStereo(l, r);
+                out[size_t(i)] = l;
+            }
+            const std::vector<double> e = env5(out);
+
+            std::vector<double> os;
+            double pkMed = 0.0, stMed = 0.0;
+            for (int k = 0; k < 6; ++k) {
+                const int i0 = nPre + k * (nB + nG);
+                double pk = 0.0;
+                for (int i = i0; i < i0 + int(0.015 * kA); ++i)
+                    pk = std::max(pk, e[size_t(i)]);
+                std::vector<double> st;
+                for (int i = i0 + int(0.050 * kA); i < i0 + int(0.090 * kA); ++i)
+                    st.push_back(e[size_t(i)]);
+                const double sm = median(st);
+                os.push_back(linToDb(pk / std::max(sm, 1e-12)));
+                if (k == 1) { pkMed = linToDb(pk); stMed = linToDb(sm); }
+            }
+            std::printf("  %-5.2f %8.0fus %9.2f %9.2f %9.2f | %7.2f |",
+                        knobs[ki], c.attackSeconds() * 1e6, pkMed, stMed,
+                        median(os), uadOs[ki]);
+            for (double v : os) std::printf(" %+5.2f", v);
+            std::printf("\n");
+        }
+        std::printf("  注：第 1 个音头（第一个数字）不算 —— reset 后 u 本来就是 0，"
+                    "\"上一次释放\"没有发生过 → 不武装慢 attack。\n"
+                    "      参考插件第 1 个音头也特殊（23.41 vs 中位数 19.22），"
+                    "所以两边都比**中位数**。\n");
+
+        // τ 扫描：一次跑出 (τ_atk → 过冲量) 的标定曲线，用来反解映射表
+        std::printf("\n  τ 扫描（knob 网格 0..1，每格换算成当前映射的 τ）:\n");
+        std::printf("  %6s %10s %9s\n", "knob", "tau", "oversht");
+        for (int k = 0; k <= 10; ++k) {
+            const double kn = k / 10.0;
+            Compressor76 c;
+            c.setInputDb(0.0);
+            c.setOutputDb(-12.90);
+            c.setRatioIndex(3);
+            c.setReleaseNorm(0.666);
+            c.setAttackNorm(kn);
+            c.prepare(kA);
+            c.reset();
+            std::vector<double> out(size_t(nTot), 0.0);
+            for (int i = 0; i < nTot; ++i) {
+                double l = sig[size_t(i)], r = l;
+                c.processStereo(l, r);
+                out[size_t(i)] = l;
+            }
+            const std::vector<double> e = env5(out);
+            std::vector<double> os;
+            for (int q = 0; q < 6; ++q) {
+                const int i0 = nPre + q * (nB + nG);
+                double pk = 0.0;
+                for (int i = i0; i < i0 + int(0.015 * kA); ++i)
+                    pk = std::max(pk, e[size_t(i)]);
+                std::vector<double> st;
+                for (int i = i0 + int(0.050 * kA); i < i0 + int(0.090 * kA); ++i)
+                    st.push_back(e[size_t(i)]);
+                os.push_back(linToDb(pk / std::max(median(st), 1e-12)));
+            }
+            std::printf("  %6.2f %8.0fus %9.2f\n", kn, c.attackSeconds() * 1e6, median(os));
+        }
+
+        // 音头之后的 GR 轨迹：直接看 attack 到底有没有进入 GR 路径
+        std::printf("\n  GR 轨迹（第 2 个音头，dB）:\n");
+        std::printf("  %-5s %8s %8s %8s %8s %8s %8s %8s %8s %8s %8s %8s\n",
+                    "knob", "0", "20us", "50us", "100us", "200us", "500us",
+                    "1ms", "2ms", "3ms", "5ms", "10ms");
+        const double tms[11] = {0, 0.02, 0.05, 0.1, 0.2, 0.5, 1, 2, 3, 5, 10};
+        for (int ki = 0; ki < 4; ++ki) {
+            Compressor76 c;
+            c.setInputDb(0.0);
+            c.setOutputDb(-12.90);
+            c.setRatioIndex(3);
+            c.setReleaseNorm(0.666);
+            c.setAttackNorm(knobs[ki]);
+            c.prepare(kA);
+            c.reset();
+
+            const int i0 = nPre + 1 * (nB + nG);
+            std::vector<double> at(size_t(11), 0.0);
+            int j = 0;
+            for (int i = 0; i < nTot; ++i) {
+                double l = sig[size_t(i)], r = l;
+                c.processStereo(l, r);
+                const double tAfterMs = (i - i0 + 1) / kA * 1000.0;
+                if (i >= i0 && j < 11 && tAfterMs >= tms[j]) {
+                    at[size_t(j)] = c.grDb();
+                    ++j;
+                }
+            }
+            std::printf("  %-5.2f", knobs[ki]);
+            for (int q = 0; q < 11; ++q) std::printf(" %8.2f", at[size_t(q)]);
+            std::printf("\n");
+        }
+
+        // 静音期（第 1 个 burst 结束后的 350 ms 空隙）：release 到底把控制量松开了吗？
+        std::printf("\n  空隙里的状态（knob 0.00 / 释放 0.666，t=burst1 结束后）:\n");
+        std::printf("  %8s %10s %10s %10s %10s %8s\n",
+                    "t(ms)", "vc", "vcFast", "vcSlow", "u", "GR(dB)");
+        {
+            Compressor76 c;
+            c.setInputDb(0.0);
+            c.setOutputDb(-12.90);
+            c.setRatioIndex(3);
+            c.setReleaseNorm(0.666);
+            c.setAttackNorm(0.00);
+            c.prepare(kA);
+            c.reset();
+
+            const int iEnd = nPre + nB;          // burst 1 结束
+            const double probes[8] = {0, 25, 50, 100, 200, 300, 345, 350};
+            int p = 0;
+            for (int i = 0; i < nTot; ++i) {
+                double l = sig[size_t(i)], r = l;
+                c.processStereo(l, r);
+                if (i >= iEnd && p < 8 && (i - iEnd) / kA * 1000.0 >= probes[p]) {
+                    const auto& s = c.sidechain();
+                    std::printf("  %8.0f %10.5f %10.5f %10.5f %10.3f %8.2f\n",
+                                probes[p], s.vcRaw(), s.vcFastRaw(), s.vcSlowRaw(),
+                                c.controlVoltage(), c.grDb());
+                    ++p;
+                }
+            }
+        }
+    }
+
     std::printf("\n结果已写入 %s\n", outDir.c_str());
     return 0;
 }
