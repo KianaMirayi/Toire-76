@@ -43,14 +43,14 @@ public:
     static constexpr double kReleaseMaxSec = 1.1;
 
     // 各档限幅阈值（设备输入端 dBFS，UAD 实测 2026-11-11，Input 旋钮 0 dB）
-    static constexpr double kThresholdDb[4] = {-52.7, -50.2, -48.8, -46.8};   // 实测值再下移 2 dB 抵消模型偏置
-    static constexpr double kAllThresholdDb = -44.9;
+    static constexpr double kThresholdDb[4] = {-49.99, -47.49, -46.09, -44.09};   // 实测值再下移 2 dB 抵消模型偏置
+    static constexpr double kAllThresholdDb = -42.19;
 
     // 目标压缩比：**实测等效值**（真机比面板标称更陡，1176 的已知特性）
     // 注意：这里存的是控制律参数，不是面板标称 ratio。
     // 反馈式模型对同一参数会放大 1.8 倍左右，所以用实测等效比除以 1.8 反推：
     //   实测 5.9/10.6/16.4/30/28.6  →  参数 3.2/5.8/9.0/16.5/15.7
-    static constexpr double kTargetRatio[5] = {3.2, 5.8, 9.0, 16.5, 15.7};
+    static constexpr double kTargetRatio[5] = {4.0, 5.8, 9.0, 16.5, 15.7};
 
     // FET 可用行程（dB）：从静态 1 dB 到满控制约 29 dB
     static constexpr double kFetSpanDb = 29.0;
@@ -293,6 +293,10 @@ public:
         vcSlow_ += (rPeak_ - vcSlow_) * coef(tauS);
 
         // ③ 取大：谁拖后腿谁决定释放
+        //    anti-windup：两个电容都不允许超过饱和电平，否则深度过载会积压过量电荷，
+        //    释放时先在轨顶停留好几秒（鼓素材实测 48% 帧卡在 38.2 dB）
+        vcFast_ = std::min(vcFast_, vcCeil_);
+        vcSlow_ = std::min(vcSlow_, vcCeil_);
         vc_ = std::max(vcFast_, vcSlow_);
         tauRelEff_ = (r > vc_) ? tauAtk_
                      : (vcSlow_ >= vcFast_ ? tauRelSlow_ : tauRelFast_);
@@ -394,6 +398,11 @@ private:
         const double dB = thrDb_;
         bias_ = feed_ * std::pow(10.0, dB / 20.0);
         silThr_ = kSilenceRel * bias_;
+        // anti-windup 上限：u 达到 1（FET 满行程）所需的 vc
+        //   没有这个限制时，深度过载会把电容灌到远高于饱和点，释放要好几秒才吐出来
+        //   （实测 drums 素材 48% 的帧卡在 38.2 dB 天花板，UAD 只有 0.1%）
+        const double dbAboveCeil = kFetSpanDb / std::max(ratioTarget_ - 1.0, 0.1);
+        vcCeil_ = bias_ * (std::pow(10.0, dbAboveCeil / 20.0) - 1.0);
     }
 
     /**
@@ -422,7 +431,8 @@ private:
     double vcSlow_ = 0.0;
     double rPeak_ = 0.0;
     double inPeak_ = 0.0;
-    double inSlowEnv_ = 0.0;   // 输入电平的慢包络（~200 ms），用来做瞬态检测        // 压缩**之前**的峰值包络（判静音用）
+    double inSlowEnv_ = 0.0;
+    double vcCeil_ = 1e9;      // anti-windup 上限   // 输入电平的慢包络（~200 ms），用来做瞬态检测        // 压缩**之前**的峰值包络（判静音用）
     double tauRelFast_ = 1.6;
     double tauRelSlow_ = 1.735;
     double releaseNorm_ = 0.666;
