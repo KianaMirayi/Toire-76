@@ -371,13 +371,47 @@
     var c = find("meter_needle_single");
     return c.angle_min_deg + t * (c.angle_max_deg - c.angle_min_deg);
   }
+
+  /* 大旋钮刻度：角度即 CSS 顺时针角度（0 dB 在右侧 159.9°，随衰减量增大逆时针展开）
+     INPUT/OUTPUT 刻度数字是**衰减量 dB**：0 dB 在最右、48 之后是 ∞ */
+  var BIG_SCALE = {
+    angles: [159.9, 119.5, 80.0, 40.5, 0.5, -41.1, -80.6, -121.0, -160.5],
+    dbs:    [0, -6, -12, -18, -24, -30, -36, -48, -60]
+  };
+  var BIG_GAIN = {
+    input:  [-41.95, -40.42, -38.89, -36.29, -33.68, -29.81, -25.93, -23.36, -20.79, -17.09, -13.39, -11.01, -8.62, -7.34, -6.05, -3.65, -1.25, -0.66, -0.07, -0.04, 0.00],
+    output: [-99.99, -93.55, -76.43, -62.35, -55.02, -47.99, -41.53, -35.87, -30.78, -26.12, -21.81, -17.85, -14.48, -11.43, -8.60, -6.06, -4.01, -2.32, -0.98, -0.12, 0.00]
+  };
+  function bigKnobDb(key, v) {
+    var t = BIG_GAIN[key] || BIG_GAIN.input;
+    var x = Math.max(0, Math.min(1, v)) * 20;
+    var i = Math.min(19, Math.floor(x));
+    var f = x - i;
+    return t[i] + (t[i + 1] - t[i]) * f;
+  }
+  function bigKnobTheta(key, v) {
+    var db = bigKnobDb(key, v);
+    var S = BIG_SCALE;
+    if (db <= S.dbs[S.dbs.length - 1]) return S.angles[S.angles.length - 1];
+    for (var i = 1; i < S.dbs.length; i++) {
+      if (db >= S.dbs[i]) {
+        var f = (db - S.dbs[i-1]) / (S.dbs[i] - S.dbs[i-1]);
+        return S.angles[i-1] + f * (S.angles[i] - S.angles[i-1]);
+      }
+    }
+    return S.angles[0];
+  }
+
   function knobTheta(k, v) {
     var c = find(k.id);
     /* 大旋钮（INPUT/OUTPUT）：panel 上「0」在 CW 端、「∞」在 CCW 端，
        UAD 里 norm=1 → 0 dB（最响）。所以大旋钮的角度要反过来算，
        顺时针（角度增大方向）对应 norm 变大。 */
+    /* 大旋钮（INPUT/OUTPUT）：指针角度直接由**当前增益（dB）落在刻度上的位置**决定。
+       刻度数字是衰减量：0 dB（最响）在右侧，6/12/18/24 顺时针往上，48 之后是 ∞。
+       这样指针永远指着与当前增益相符的数字，不会出现方向相反的情况。 */
     if (k.kind === "big")
-      return c.angle_max_deg + v * (c.angle_min_deg - c.angle_max_deg);
+      return bigKnobTheta(k.key, v);
     return c.angle_min_deg + v * (c.angle_max_deg - c.angle_min_deg);
   }
 
