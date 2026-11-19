@@ -282,6 +282,10 @@ void TOIRE76AudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
 
     for (int ch = numInputChannels; ch < buffer.getNumChannels(); ++ch)
         buffer.clear (ch, 0, numSamples);
+
+    // 实时 GR（给编辑器的 HUD / 表针用）：音频线程只做一次原子写
+    grDbForUi.store (powered && ! bypassed ? (float) compressor.grDb() : 0.0f,
+                     std::memory_order_relaxed);
 }
 
 //==============================================================================

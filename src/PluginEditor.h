@@ -44,7 +44,8 @@ public:
  *   · pageFinishedLoading 之前一律不 emit
  *   · C++→JS 只用 emitEventIfBrowserIsVisible
  */
-class TOIRE76AudioProcessorEditor final : public juce::AudioProcessorEditor
+class TOIRE76AudioProcessorEditor final : public juce::AudioProcessorEditor,
+                                          private juce::Timer
 {
 public:
     explicit TOIRE76AudioProcessorEditor (TOIRE76AudioProcessor&);
@@ -53,6 +54,7 @@ public:
     void paint (juce::Graphics&) override;
     void resized() override;
     void visibilityChanged() override;
+    void timerCallback() override;
 
 private:
     void ensureWebView();
@@ -93,7 +95,8 @@ private:
 
 //==============================================================================
 /** WebView2 关掉时的占位编辑器（vs2026 preset 也能编译 / 跑起来）。 */
-class TOIRE76AudioProcessorEditor final : public juce::AudioProcessorEditor
+class TOIRE76AudioProcessorEditor final : public juce::AudioProcessorEditor,
+                                          private juce::Timer
 {
 public:
     explicit TOIRE76AudioProcessorEditor (TOIRE76AudioProcessor&);

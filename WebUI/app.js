@@ -319,7 +319,7 @@
     gr: 0.0, level: 0.0, power: true, bypass: false
   };
 
-  var DEBUG = (window.location.search.indexOf("debug=1") >= 0) || !HAS_BACKEND;
+  var DEBUG = true;   // 临时：实时显示 INPUT/OUTPUT 增益，核对完删掉
 
   var cppStatus = HAS_BACKEND ? "wait" : "mock";
 
@@ -622,11 +622,33 @@
     });
   }
 
+  /* 旋钮拖动：**竖直 + 水平两个方向都算数**
+       向右 (dx>0)  = 增大
+       向上 (dy>0)  = 增大        ← dy 用 "上一帧 clientY - 这一帧 clientY" 得到
+       向左 / 向下  = 减小
+     参数变大 → 指针顺时针 → 刻度朝 0 dB（不衰减）→ 声音更响。
+
+     灵敏度：两轴位移相加后除以 TRAVEL_PX。
+       纯竖直 / 纯水平拖满 300 px 走完 0..1；
+       45° 斜拖时两轴各 150 px 走完 —— 两轴是"相加"的，但不会变成两倍速。
+     旧版只有 dy、且 180 px 走完，竖直手感更灵敏但也更容易过冲；
+     这里兼顾"水平也要能调"和"别太跳"。 */
+  var KNOB_TRAVEL_PX = 300;
+
   function bindKnobDrag(node, key) {
-    var dragging = false, lastY = 0;
+    var dragging = false, lastX = 0, lastY = 0;
+
+    function endDrag() {
+      if (!dragging) return;
+      dragging = false;
+      var st = slider(key);
+      if (st) st.sliderDragEnded();
+    }
 
     node.addEventListener("mousedown", function (e) {
+      if (e.button !== 0) return;                 // 只响应左键
       dragging = true;
+      lastX = e.clientX;
       lastY = e.clientY;
       e.preventDefault();
       var st = slider(key);
@@ -635,22 +657,26 @@
 
     window.addEventListener("mousemove", function (e) {
       if (!dragging) return;
-      var dy = lastY - e.clientY;
+
+      // 在窗口外松开鼠标时收不到 mouseup —— 用 buttons 兜底，避免"粘住"
+      if (e.buttons === 0) { endDrag(); return; }
+
+      var dx = e.clientX - lastX;     // 向右为正
+      var dy = lastY - e.clientY;     // 向上为正
+      lastX = e.clientX;
       lastY = e.clientY;
-      state[key] = clamp(state[key] + dy / 180, 0, 1);
+      if (dx === 0 && dy === 0) return;
+
+      state[key] = clamp(state[key] + (dx + dy) / KNOB_TRAVEL_PX, 0, 1);
       render();
       pushSlider(key, state[key]);
     });
 
-    window.addEventListener("mouseup", function () {
-      if (!dragging) return;
-      dragging = false;
-      var st = slider(key);
-      if (st) st.sliderDragEnded();
-    });
+    window.addEventListener("mouseup", function () { endDrag(); });
 
     node.addEventListener("wheel", function (e) {
       e.preventDefault();
+      // 滚轮向上 = 增大（与"向上拖"同向）
       var dir = e.deltaY > 0 ? 1 : (e.deltaY < 0 ? -1 : 0);
       state[key] = clamp(state[key] - dir * 0.02, 0, 1);
       render();
@@ -716,12 +742,15 @@
       var edge = sv("line", { stroke: "#111", "stroke-width": 2.5, "stroke-linecap": "round", opacity: .85 });
       var core = sv("line", { stroke: "#ffffff", "stroke-width": 1.75, "stroke-linecap": "round" });
       o.appendChild(edge); o.appendChild(core);
-      POINTERS.push({ key: pair[1], cx: c.pivot_px[0], cy: c.pivot_px[1], edge: edge, core: core });
+      POINTERS.push({ key: pair[1], id: pair[0], cx: c.pivot_px[0], cy: c.pivot_px[1], edge: edge, core: core });
     });
   }
   function renderPointers() {
     for (var i = 0; i < POINTERS.length; i++) {
-      var p = POINTERS[i], th = knobTheta({ id: "knob_" + p.key }, state[p.key]);
+      var p = POINTERS[i];
+      /* ⚠️ 必须带 kind —— 只传 {id} 时 knobTheta 会退到 components.json 的反向角度上，
+         于是指针和声音反着走（INPUT/OUTPUT 大旋钮的老 bug）。 */
+      var th = knobTheta({ id: p.id, kind: "big", key: p.key }, state[p.key]);
       var rad = (th - 90) * Math.PI / 180.0;
       var r0 = 24.0, r1 = 40.5;
       var x1 = p.cx + r0 * Math.cos(rad), y1 = p.cy + r0 * Math.sin(rad);
@@ -739,12 +768,9 @@ function needleTheta(t) {
   }
 
 
-  /* 大旋钮刻度：角度即 CSS 顺时针角度（0 dB 在右侧 159.9°，随衰减量增大逆时针展开）
-     INPUT/OUTPUT 刻度数字是**衰减量 dB**：0 dB 在最右、48 之后是 ∞ */
-  var BIG_SCALE = {
-    angles: [159.9, 119.5, 80.0, 40.5, 0.5, -41.1, -80.6, -121.0, -160.5],
-    dbs:    [0, -6, -12, -18, -24, -30, -36, -48, -60]
-  };
+  /* 大旋钮刻度（顺时针递增展开）：0 dB 在 519.9°（=159.9°，右侧），每 −6 dB 增加约 40° 顺时针
+     INPUT/OUTPUT 刻度数字是**衰减量 dB**：0 dB 在最右、48 之后是 ∞
+     （角度表见下方 BIG_KNOB_SCALE；这里只留实测增益表给 HUD 显示用） */
   var BIG_GAIN = {
     input:  [-41.95, -40.42, -38.89, -36.29, -33.68, -29.81, -25.93, -23.36, -20.79, -17.09, -13.39, -11.01, -8.62, -7.34, -6.05, -3.65, -1.25, -0.66, -0.07, -0.04, 0.00],
     output: [-99.99, -93.55, -76.43, -62.35, -55.02, -47.99, -41.53, -35.87, -30.78, -26.12, -21.81, -17.85, -14.48, -11.43, -8.60, -6.06, -4.01, -2.32, -0.98, -0.12, 0.00]
@@ -756,29 +782,35 @@ function needleTheta(t) {
     var f = x - i;
     return t[i] + (t[i + 1] - t[i]) * f;
   }
+  /* 大旋钮刻度（照 renders/components.json → markings.input_scale 的实际印字）：
+       θ_cw:  −∞=198.5°  48=239.0°  36=279.4°  30=318.9°  24=360.5°
+              18=400.5°  12=440.0°  6=479.5°   0=519.9°（=159.9°+360）
+       即：**归一化值 v 增大 = θ_cw 增大 = 指针顺时针 = 朝 0 dB = 更响**。
+
+     ⚠️ 不要用 components.json 里 knob_input/output 的 angle_min_deg/angle_max_deg：
+        那一对（159.9 → −161.52）是"v↑ → θ_cw↓"的反向约定（angle_min 是 0 dB、
+        angle_max 是 −∞），直接用会把指针转反 —— 这正是"指针和声音相反"的根因。
+     刻度数字是**标称衰减量**，不是实测增益；指针只按旋钮位置线性走，
+     与参考插件一致（指针落在哪个数字上 = 面板印字，不查 dB 表）。 */
+  var BIG_KNOB_SCALE = { start: 198.5, sweep: 321.4 };   // −∞ → 0 dB（顺时针）
+
   function bigKnobTheta(key, v) {
-    var db = bigKnobDb(key, v);
-    var S = BIG_SCALE;
-    if (db <= S.dbs[S.dbs.length - 1]) return S.angles[S.angles.length - 1];
-    for (var i = 1; i < S.dbs.length; i++) {
-      if (db >= S.dbs[i]) {
-        var f = (db - S.dbs[i-1]) / (S.dbs[i] - S.dbs[i-1]);
-        return S.angles[i-1] + f * (S.angles[i] - S.angles[i-1]);
-      }
-    }
-    return S.angles[0];
+    return BIG_KNOB_SCALE.start + clamp(v, 0, 1) * BIG_KNOB_SCALE.sweep;
+  }
+
+  /* 大旋钮判定：id / key / param / kind 任一命中即可。
+     ⚠️ renderPointers() 传进来的对象可能只有 id，别只认 kind === "big"（曾经漏过）。 */
+  function isBigKnob(k) {
+    if (!k) return false;
+    if (k.kind === "big") return true;
+    if (k.id === "knob_input" || k.id === "knob_output") return true;
+    if (k.key === "input" || k.key === "output") return true;
+    return k.param === "input" || k.param === "output";
   }
 
   function knobTheta(k, v) {
+    if (isBigKnob(k)) return bigKnobTheta(k.key || k.param || "input", v);
     var c = find(k.id);
-    /* 大旋钮（INPUT/OUTPUT）：panel 上「0」在 CW 端、「∞」在 CCW 端，
-       UAD 里 norm=1 → 0 dB（最响）。所以大旋钮的角度要反过来算，
-       顺时针（角度增大方向）对应 norm 变大。 */
-    /* 大旋钮（INPUT/OUTPUT）：指针角度直接由**当前增益（dB）落在刻度上的位置**决定。
-       刻度数字是衰减量：0 dB（最响）在右侧，6/12/18/24 顺时针往上，48 之后是 ∞。
-       这样指针永远指着与当前增益相符的数字，不会出现方向相反的情况。 */
-    if (k.kind === "big")
-      return bigKnobTheta(k.key, v);
     return c.angle_min_deg + v * (c.angle_max_deg - c.angle_min_deg);
   }
 
@@ -904,6 +936,19 @@ function needleTheta(t) {
     requestAnimationFrame(step);
   }
 
+  /* 紧凑 HUD：实时显示 INPUT/OUTPUT 与 GR（调试用，确认后可删） */
+  function renderHud() {
+    if (!DEBUG) return;
+    var hud = document.getElementById("hud");
+    if (!hud) return;
+    var inDb = bigKnobDb("input", state.input), outDb = bigKnobDb("output", state.output);
+    var inTh = bigKnobTheta("input", state.input) % 360;
+    hud.textContent =
+      "IN  " + state.input.toFixed(3) + "  " + inDb.toFixed(1) + " dB  " + inTh.toFixed(0) + "°\n" +
+      "OUT " + state.output.toFixed(3) + "  " + outDb.toFixed(1) + " dB\n" +
+      "GR  " + state.gr.toFixed(1) + " dB";
+  }
+
   function render() {
     renderPointers();
     // 旋钮指示针
@@ -912,7 +957,11 @@ function needleTheta(t) {
       if (!wrap) return;
       var strip = BODY_STRIPS[k.key];
       if (strip) {
-        var fr = (strip.frames - 1) - Math.round(state[k.key] * (strip.frames - 1));   // 序列帧序与指针方向相反，翻转
+        /* 序列帧只影响滚花/高光相位 —— 贴图里**没有**白线指针（指针是 overlay 里的 SVG 直线）。
+           UAD 素材的帧序与语义值相反（frame0 = 0 dB 位、帧号递增 = θ_cw 递减），
+           所以统一用 (frames-1) - round(v*(frames-1))，和大旋钮指针的顺时针方向一致。
+           实测 61 帧之间只有 <2% 像素有差别，肉眼几乎看不出，方向对就行。 */
+        var fr = (strip.frames - 1) - Math.round(state[k.key] * (strip.frames - 1));
         strip.el.style.backgroundPositionY = (-fr * strip.size) + "px";
       }
       var ind = wrap.querySelector(".knob-ind");
@@ -955,20 +1004,7 @@ function needleTheta(t) {
     if (p) p.className = state.power ? "tog on" : "tog";
     if (b) b.className = state.bypass ? "tog on" : "tog";
 
-    // 调试 HUD
-    if (DEBUG) {
-      var hud = document.getElementById("hud");
-      if (hud) {
-        hud.textContent =
-          "in " + state.input.toFixed(3) + "  out " + state.output.toFixed(3) +
-          "  att " + state.attack.toFixed(3) + "  rel " + state.release.toFixed(3) + "\n" +
-          "ratio " + ["4:1", "8:1", "12:1", "20:1", "ALL"][state.ratio] +
-          "   meter " + ["GR", "+8", "+4", "OFF"][state.meter] +
-          "   pwr " + (state.power ? "on" : "off") +
-          "   byp " + (state.bypass ? "on" : "off") +
-          "   " + cppStatus;
-      }
-    }
+    renderHud();
   }
 
   /* ---------------- 11. 参数绑定（APVTS <-> 网页） ---------------- */
@@ -976,6 +1012,16 @@ function needleTheta(t) {
     var st = slider(name);
     if (!st) return;
     st.setNormalisedValue(clamp(normalised, 0, 1));
+  }
+
+  /* 宿主（APVTS）回读的归一化值：JUCE relay 的 valueChanged 带的是 scaled 值，
+     getNormalisedValue() 再按 start/end/skew 换回来。0..1 参数下与 n 完全相同；
+     HUD 里对比 n 和 host 就能看出"参数回传有没有被反向/夹住"。 */
+  function hostNorm(name) {
+    var st = slider(name);
+    if (!st) return NaN;
+    var v = st.getNormalisedValue();
+    return isFinite(v) ? v : NaN;
   }
 
   function pushChoice(name, index) {
@@ -1025,6 +1071,14 @@ function needleTheta(t) {
         cppStatus = (payload && payload.length) ? ("cpp " + payload[0]) : "cpp ok";
         render();
       });
+
+      // 实时 GR（30 Hz，来自音频线程的原子量）
+      window.__JUCE__.backend.addEventListener("toire76Gr", function (payload) {
+        if (payload && payload.length) {
+          state.gr = parseFloat(payload[0]) || 0;
+          renderHud();
+        }
+      });
     }
   }
 
@@ -1063,6 +1117,8 @@ function boot() {
       render: render,
       pushSlider: pushSlider,
       pushChoice: pushChoice,
+      knobTheta: knobTheta,       // 供调试/截图核对：{id,kind,key} + n → theta_cw
+      bigKnobTheta: bigKnobTheta,
       hasBackend: HAS_BACKEND
     };
   }

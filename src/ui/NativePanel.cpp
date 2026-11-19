@@ -26,6 +26,18 @@ namespace
         { "release", false, 210.80f,  509.70f, 475.0f, 125.0f },
     };
 
+    // 大旋钮（INPUT/OUTPUT）指针角度（theta_cw）：−∞ = 198.5° → 0 dB = 519.9°，顺时针。
+    // 与 markings.input_scale 的印字一致；值↑ → 指针顺时针 → 朝 0 dB → 更响。
+    // ⚠️ 不要用 kKnobDefs 里 INPUT/OUTPUT 的 angleMin/angleMax：那一对是素材的
+    //    "值↑ → 角度↓" 反向约定（159.9 = 0 dB、−161.52 = −∞），直接用会把指针转反。
+    constexpr float kBigKnobAngleStart = 198.5f;
+    constexpr float kBigKnobAngleSweep = 321.4f;
+
+    inline float bigKnobAngle (float v) noexcept
+    {
+        return kBigKnobAngleStart + juce::jlimit (0.0f, 1.0f, v) * kBigKnobAngleSweep;
+    }
+
     struct ScaleMark
     {
         const char* label;
@@ -632,7 +644,8 @@ void NativePanel::paintBigKnobPointers (juce::Graphics& g)
     for (int i = 0; i < 2; ++i)
     {
         const auto& d = kKnobDefs[i];
-        const auto angle = d.angleMinDeg + knobValues[i] * (d.angleMaxDeg - d.angleMinDeg);
+        const auto angle = d.isBig ? bigKnobAngle (knobValues[i])
+                                   : d.angleMinDeg + knobValues[i] * (d.angleMaxDeg - d.angleMinDeg);
         const auto rad = juce::degreesToRadians (angle - 90.0f);
         const juce::Point<float> centre { d.pivotX, d.pivotY };
 

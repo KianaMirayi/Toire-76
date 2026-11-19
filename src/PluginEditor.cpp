@@ -103,6 +103,8 @@ TOIRE76AudioProcessorEditor::~TOIRE76AudioProcessorEditor()
 {
     // ⚠️ 必须在成员析构前先把 WebView2 拆掉：
     //    浏览器析构时会回调 relay 的 webViewDestructed，那时 relay 还活着才对。
+    stopTimer();
+
     if (webView != nullptr)
     {
         webView->onPageLoaded = nullptr;
@@ -119,6 +121,16 @@ TOIRE76AudioProcessorEditor::~TOIRE76AudioProcessorEditor()
     meterAttachment.reset();
     powerAttachment.reset();
     bypassAttachment.reset();
+}
+
+void TOIRE76AudioProcessorEditor::timerCallback()
+{
+    if (webView == nullptr || ! pageLoaded)
+        return;
+
+    juce::Array<juce::var> msg;
+    msg.add (juce::var ((double) processor.grDbForUi.load (std::memory_order_relaxed)));
+    webView->emitEventIfBrowserIsVisible ("toire76Gr", msg);
 }
 
 void TOIRE76AudioProcessorEditor::visibilityChanged()
@@ -184,6 +196,9 @@ void TOIRE76AudioProcessorEditor::ensureWebView()
         payload.add (juce::var ("ok"));
         payload.add (juce::var ("0.1.0"));
         webView->emitEventIfBrowserIsVisible ("toire76Status", payload);
+
+        // 实时 GR 推送到网页：30 Hz，音频线程只写原子量
+        startTimerHz (30);
     };
 
     // ⚠️⚠️ 顺序是硬性的：
