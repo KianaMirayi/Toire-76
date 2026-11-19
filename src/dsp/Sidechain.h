@@ -44,7 +44,10 @@ public:
 
     // 各档限幅阈值（设备输入端 dBFS，UAD 实测 2026-11-11，Input 旋钮 0 dB）
     static constexpr double kThresholdDb[4] = {-49.99, -47.49, -46.09, -44.09};   // 实测值再下移 2 dB 抵消模型偏置
-    static constexpr double kAllThresholdDb = -42.19;
+    // ⚠️ 2026-11-20 修正：ALL 档原来是 -42.19（比 20:1 的 -44.09 还高 1.9 dB），
+    //    但 UAD 的 ALL 静态曲线落在 8:1 与 12:1 之间（-40 dBFS：UAD 4.55 vs 我们 0.97）。
+    //    改为 -46.0 后，-40/-25/-10 dBFS 的 GR 与 UAD 差 ≤0.2 dB（原来是整体少 3.5 dB）。
+    static constexpr double kAllThresholdDb = -46.0;
 
     // 目标压缩比：**实测等效值**（真机比面板标称更陡，1176 的已知特性）
     // 注意：这里存的是控制律参数，不是面板标称 ratio。
@@ -73,9 +76,31 @@ public:
     // 武装条件：静音期间 GR 至少掉了这么多（u 单位，≈ 2 dB）
     static constexpr double kAtkArmDrop = 0.05;
 
-    // 探测器（峰值检波）自身的充电 τ（s）：检测器带宽，不是面板 attack。
-    // 27.8 µs 沿用旧映射里标定过的值 —— 静态曲线的抖动占空比就建立在这个数上。
-    static constexpr double kDetectTau = 27.8e-6;
+    // 探测器（峰值检波）自身的充电 τ：**attack 旋钮真正作用在这一层**。
+    // 真实的 1176 里，attack 就是侧链那个可变电阻 —— 它改的是检波电容的充电速度，
+    // 不是"给控制量加一个一阶平滑"。
+    //
+    // 2026-11-20 高驱动标定（hot-drums-03 归一化到 0 dBFS、in=1.0、20:1、release .666，
+    // 逐 attack 旋钮比较输出峰值；dPK = 我们 − UAD）：
+    //   knob      0.00    0.34    0.50    0.67    1.00
+    //   UAD 峰   −0.90   −3.94   −5.23   −7.00  −13.06  dBFS
+    //   旧实现（固定 27.8 µs + 只在"静音后武装"窗口里平滑 u）：
+    //   我们峰低 −7.4 dB（in=1.0）/ −4.6 dB（in=0.6）→ crest 14 dB，UAD 21–24 dB
+    //   本表（终版实测，hot-drums-03，dPK = 我们 − UAD）：
+    //     in=1.0 20:1  dPK −0.05 … +0.47 dB，dRMS −0.14 dB
+    //     in=0.6 20:1  dPK +0.63 … +2.04 dB，dRMS −0.38 dB
+    //   ⚠️ 代价：attack 旋钮的"过冲量"标定（tests/dsp_test.cpp §7，192k/10 kHz）
+    //   会漂移 +0.7 / +0.5 / +1.3 / −1.9 dB（knob 0/.34/.67/1.0），
+    //   需要按两把尺子（过冲量 + 素材峰值）重新联合标定 kDetTau[] 与 tauAtk。
+    //
+    // 注意：表里中段是平的（.34 与 .67 同为 580 µs）。这不是笔误 —— 我们的环路
+    // 在稳态是"需求贴轨"的伺服，真正决定音头过冲的是检波电容的充电速度，
+    // 旋钮中段的差异在实测里被环路吞掉了（原来是靠 u 平滑硬造出来的差异）。
+    // ALL 档的探测器 τ 倍率（见 setRatio 注释）：参考插件的 ALL 是慢 attack
+    static constexpr double kAllDetScale = 4.0;
+
+    static constexpr double kDetKnob[4] = {0.00, 0.34, 0.67, 1.00};
+    static constexpr double kDetTau[4] = {4400e-6, 580e-6, 580e-6, 31e-6};
 
     // 真静音回落 τ 的标定系数（乘在 release 的 fast 端上）。
     // 依据见 control() 注释；数值由 §7 的过冲量实测反推，见 setAttackRelease()。
@@ -107,6 +132,10 @@ public:
         thrDb_ = (idx == kAllIndex) ? kAllThresholdDb : kThresholdDb[idx];
         ratioTarget_ = kTargetRatio[idx];
         feed_ = 1.0;
+        // ALL 档（全按键按下）在参考插件里是**慢 attack**：静态曲线压得很深
+        // （0 dBFS 时 42.4 dB），但素材上的瞬态几乎不压（峰值 0.13 dBFS）。
+        // 这里用一个更长的探测器 τ 近似这个程序相关性。
+        allDetScale_ = (idx == kAllIndex) ? kAllDetScale : 1.0;
         updateBias();
     }
 
@@ -165,6 +194,17 @@ public:
                 break;
             }
         tauAtk_ = std::exp(lus) * 1e-6;
+        // 探测器充电 τ（attack 旋钮的真实作用点）：按 log(τ) 插值
+        {
+            double ld = std::log(kDetTau[3]);
+            for (int i = 1; i < 4; ++i)
+                if (attackNorm <= kDetKnob[i]) {
+                    ld = std::log(kDetTau[i-1]) + (std::log(kDetTau[i])-std::log(kDetTau[i-1]))
+                         * (attackNorm - kDetKnob[i-1]) / (kDetKnob[i] - kDetKnob[i-1]);
+                    break;
+                }
+            detTau_ = std::exp(ld);
+        }
         tauRelFast_ = releaseTauFast(releaseNorm);
         tauRelSlow_ = releaseTauSlow(releaseNorm);
         tauRel_ = tauRelSlow_;
@@ -280,11 +320,13 @@ public:
         }
 
         // ① C_fast：r > vc 充（attack），否则放（releaseFast）
-        //    ⚠️ 这里充的是**探测器**（峰值检波），用固定的检测 τ，不是面板 attack。
-        //    面板 attack 作用在"控制量"上（见 control()）：如果把面板 τ 也塞进
-        //    这个电容，等于改掉环路的抖动占空比，静态曲线会跟着变（实测 20:1 的
-        //    等效比从 16 掉到 1.9）。两者是两个物理环节，不能共用一个 τ。
-        const double tauF = (r > vcFast_) ? kDetectTau : tauRelFast_;
+        //    ⚠️ 2026-11-20 修正：这里充电用的是 detTau_（由 attack 旋钮决定）。
+        //    旧注释说"把面板 τ 塞进这个电容会让 20:1 的等效比从 16 掉到 1.9"，
+        //    但那次实验是把 τ 和 u 平滑**同时**打开测的；本次逐档实测（300 µs / 1 ms /
+        //    3 ms 三档，静态 GR 在 −25/−10/−3/0 dBFS 逐点相同）证明：
+        //    只把 detTau_ 换成几百 µs，静态曲线不动，而素材峰值差从 −7.4 dB 收到 0。
+        //    真正决定静态比的是 control() 的 (R−1)·dBabove 律，不是检波 τ。
+        const double tauF = (r > vcFast_) ? detTau_ * allDetScale_ : tauRelFast_;
         vcFast_ += (r - vcFast_) * coef(tauF);
 
         // ② C_slow：慢充 / 慢放。b 秒持续过载后充到 (1−e^{−b/T})，
@@ -438,6 +480,8 @@ private:
     double releaseNorm_ = 0.666;
     double attackNorm_ = 0.5;
     double tauAtk_ = kAttackMinSec;
+    double detTau_ = kDetTau[1];   // 探测器充电 τ（由 attack 旋钮决定）
+    double allDetScale_ = 1.0;     // ALL 档的探测器 τ 倍率
     double uPrev_ = 0.0;
     double tauRel_ = kReleaseMaxSec;
     double tauRelEff_ = kReleaseMaxSec;

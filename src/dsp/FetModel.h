@@ -29,7 +29,12 @@ public:
     static constexpr double kQuiescentRf = 220000.0;   // → gain 0.891
 
     // 满压缩：20 dB 衰减
-    static constexpr double kMinRf = 300.0;    // → 约 30 dB 衰减
+    // 2026-11-20 高驱动标定：300Ω → 233Ω。
+    //   300Ω 时 GR 上限 = 20log10(0.8907/(300/27300)) = 38.19 dB，而 UADx 在 0/+2 dBFS
+    //   仍到 40.32/40.34 dB（16-hot-stairs 实测）→ 热端我们比参考少 2.1 dB GR。
+    //   233Ω → 上限 40.36 dB，与 UAD 的 40.3 对齐；u=0..0.9 段的静态曲线不变
+    //   （fitDefaults 用 rangeDb 反解 b，整条曲线按同一 shape 重新归一）。
+    static constexpr double kMinRf = 233.0;    // → 约 40.36 dB 衰减上限
 
     // exp(a + b·u + c·u²) 的系数；先按两个锚点 + 中点线性假设占位，待测后替换
     // u=0 → 220k, u=1 → 3k, u=0.5 → 26k（先按对数中点取几何平均）
