@@ -1,0 +1,32 @@
+TOiRE-76 — Windows VST3 安装说明
+=================================
+
+安装内容
+--------
+1. VST3 插件（64 位）
+   C:\Program Files\Common Files\VST3\TOiRE-76.vst3\
+
+2. Microsoft WebView2 运行时（仅在检测到缺失时自动安装）
+   插件界面使用 WebView2 渲染；Windows 11 自带，部分旧版 Windows 10 需要联网安装。
+
+卸载
+----
+「设置 → 应用」里找到 "TOiRE-76 (VST3)" 卸载，或使用插件目录内的卸载程序。
+
+用户数据（不会被卸载删除）
+--------------------------
+  %APPDATA%\TOiRE-76\
+    WebView2\       界面缓存
+    Presets\        用户保存的预设（*.t76preset）
+
+需要彻底清除时，删除上面这个文件夹即可。
+
+兼容性
+------
+  · 64 位 Windows 10 1809 及以上 / Windows 11
+  · 支持 VST3 的宿主（REAPER / Cubase / Studio One / Studio Pro 等）
+  · 采样率任意；插件会自动做内部 2–4 倍过采样，总延迟固定 86 samples @48 kHz
+
+问题反馈
+--------
+  https://github.com/KianaMirayi/Toire-76/issues
