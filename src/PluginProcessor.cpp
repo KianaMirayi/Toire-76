@@ -31,8 +31,8 @@ juce::AudioProcessorValueTreeState::ParameterLayout TOIRE76AudioProcessor::creat
 {
     juce::AudioProcessorValueTreeState::ParameterLayout layout;
 
-    layout.add (makeUnitFloat ("input",   "Input",   0.2000f));
-    layout.add (makeUnitFloat ("output",  "Output",  0.6259f));
+    layout.add (makeUnitFloat ("input",   "Input",   0.4500f));
+    layout.add (makeUnitFloat ("output",  "Output",  0.7500f));
     layout.add (makeUnitFloat ("attack",  "Attack",  0.5000f));
     layout.add (makeUnitFloat ("release", "Release", 0.6660f));
 
@@ -68,12 +68,12 @@ namespace
 
     // 工厂预设（参照 1176 的常见用法）
     const Preset kPresets[TOIRE76AudioProcessor::kNumPresets] = {
-        { "Init",        0.200f, 0.6259f, 0.500f, 0.666f, 0, 0 },
-        { "Drum Room",   0.620f, 0.500f,  0.900f, 0.300f, 4, 0 },
-        { "Drum Punch",  0.550f, 0.550f,  0.750f, 0.450f, 1, 0 },
-        { "Vocal",       0.450f, 0.600f,  0.550f, 0.500f, 1, 0 },
-        { "Bass",        0.500f, 0.580f,  0.400f, 0.350f, 2, 0 },
-        { "Mix Bus",     0.350f, 0.650f,  0.500f, 0.600f, 0, 0 }
+        { "Init",        0.450f, 0.750f, 0.500f, 0.666f, 0, 0 },
+        { "Drum Room",   0.600f, 0.800f, 0.900f, 0.300f, 4, 0 },
+        { "Drum Punch",  0.550f, 0.800f, 0.750f, 0.450f, 1, 0 },
+        { "Vocal",       0.500f, 0.780f, 0.550f, 0.500f, 1, 0 },
+        { "Bass",        0.550f, 0.780f, 0.400f, 0.350f, 2, 0 },
+        { "Mix Bus",     0.400f, 0.820f, 0.500f, 0.600f, 0, 0 }
     };
 }
 
@@ -281,6 +281,26 @@ void TOIRE76AudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     compressor.setReleaseNorm(releaseParam ? releaseParam ->load() : 0.666f);
     compressor.setRatioIndex (ratioParam ? int (ratioParam->load() + 0.5f) : 0);
     compressor.setPower (true);
+
+    // 预设/参数大跳变时复位侧链状态：否则会带着上一个预设积累的 GR 进入新设置，
+    // 表现为"切完预设前半秒压得不对"
+    {
+        const float inNow  = inputParam   ? inputParam->load()   : 0.2f;
+        const float relNow = releaseParam ? releaseParam->load() : 0.666f;
+        const float atkNow = attackParam  ? attackParam->load()  : 0.5f;
+        const int   ratNow = ratioParam   ? int (ratioParam->load() + 0.5f) : 0;
+
+        const bool jump = (std::abs (inNow - lastMeterIn_)  > 0.12f)
+                       || (std::abs (relNow - lastMeterRel_)> 0.25f)
+                       || (std::abs (atkNow - lastMeterAtk_)> 0.25f)
+                       || (ratNow != lastMeterRatio_);
+
+        if (jump && hasMeterState_)
+            compressor.reset();
+
+        lastMeterIn_ = inNow; lastMeterRel_ = relNow; lastMeterAtk_ = atkNow;
+        lastMeterRatio_ = ratNow; hasMeterState_ = true;
+    }
     // METER = OFF（第 4 档）→ 压缩旁通（与参考插件一致：打到 OFF 不再压缩）
     compressor.setCompressionBypass (meterParam != nullptr && int (meterParam->load() + 0.5f) == 3);
 

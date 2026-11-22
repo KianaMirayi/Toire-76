@@ -80,6 +80,13 @@ private:
     std::atomic<float>* meterParam   = nullptr;
 
     int currentProgram = 0;
+
+    // 预设/参数跳变检测（切换预设时复位侧链）
+    float lastMeterIn_   = 0.2f;
+    float lastMeterRel_  = 0.666f;
+    float lastMeterAtk_  = 0.5f;
+    int   lastMeterRatio_ = -1;
+    bool  hasMeterState_ = false;
     std::atomic<float>* powerParam   = nullptr;
     std::atomic<float>* bypassParam  = nullptr;
 

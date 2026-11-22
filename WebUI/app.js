@@ -974,12 +974,12 @@ function needleTheta(t) {
 
   /* ── 工厂预设（与 C++ 的 kPresets 保持一致的值）── */
   var PRESETS = [
-    { name: "Init",       input: 0.200, output: 0.6259, attack: 0.500, release: 0.666, ratio: 0, meter: 0 },
-    { name: "Drum Room",  input: 0.620, output: 0.500,  attack: 0.900, release: 0.300, ratio: 4, meter: 0 },
-    { name: "Drum Punch", input: 0.550, output: 0.550,  attack: 0.750, release: 0.450, ratio: 1, meter: 0 },
-    { name: "Vocal",      input: 0.450, output: 0.600,  attack: 0.550, release: 0.500, ratio: 1, meter: 0 },
-    { name: "Bass",       input: 0.500, output: 0.580,  attack: 0.400, release: 0.350, ratio: 2, meter: 0 },
-    { name: "Mix Bus",    input: 0.350, output: 0.650,  attack: 0.500, release: 0.600, ratio: 0, meter: 0 }
+    { name: "Init",       input: 0.450, output: 0.750, attack: 0.500, release: 0.666, ratio: 0, meter: 0 },
+    { name: "Drum Room",  input: 0.600, output: 0.800, attack: 0.900, release: 0.300, ratio: 4, meter: 0 },
+    { name: "Drum Punch", input: 0.550, output: 0.800, attack: 0.750, release: 0.450, ratio: 1, meter: 0 },
+    { name: "Vocal",      input: 0.500, output: 0.780, attack: 0.550, release: 0.500, ratio: 1, meter: 0 },
+    { name: "Bass",       input: 0.550, output: 0.780, attack: 0.400, release: 0.350, ratio: 2, meter: 0 },
+    { name: "Mix Bus",    input: 0.400, output: 0.820, attack: 0.500, release: 0.600, ratio: 0, meter: 0 }
   ];
   var presetIndex = 0;
 
