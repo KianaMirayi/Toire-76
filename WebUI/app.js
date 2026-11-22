@@ -1015,9 +1015,12 @@ function needleTheta(t) {
     pushChoice("ratio", pv.ratio);
     pushChoice("meter", pv.meter);
     var sel = document.getElementById("preset-select");
-    if (sel) sel.selectedIndex = presetIndex;
-    var nm = document.getElementById("preset-name");
-    if (nm) nm.value = pv.name;
+    if (sel) {
+      var item = list[i];
+      var v = item.kind === "user" ? String(item.idx) : String(1000 + item.idx);
+      sel.value = v;
+      presetSelectValue = v;
+    }
     render();
   }
 
@@ -1029,12 +1032,6 @@ function needleTheta(t) {
 
     var g2 = document.createElement("optgroup");
     g2.label = "用户预设";
-    // 最上方固定一条：保存当前参数为预设
-    var saveItem = document.createElement("option");
-    saveItem.value = "-2";
-    saveItem.textContent = "保存当前参数为预设";
-    g2.appendChild(saveItem);
-
     if (!FILE_PRESETS.length) {
       var e = document.createElement("option");
       e.value = "-1"; e.textContent = "（无用户预设）"; e.disabled = true;
@@ -1071,17 +1068,14 @@ function needleTheta(t) {
 
     sel.addEventListener("change", function () {
       var v = parseInt(sel.value, 10);
-      if (v === -2) {
-        // 「保存当前参数为预设」：弹保存对话框（含位置与名称）
-        sendPresetCmd("save", "");
-        sel.value = presetSelectValue || "-1";
-        return;
-      }
       if (isNaN(v) || v < 0) { sel.value = presetSelectValue || "-1"; return; }
       presetSelectValue = sel.value;
       if (v >= 1000) applyPreset(FILE_PRESETS.length + (v - 1000));
       else applyPreset(v);
     });
+
+    var svBtn = document.getElementById("preset-save");
+    if (svBtn) svBtn.addEventListener("click", function () { sendPresetCmd("save", ""); });
 
     var pv = document.getElementById("preset-prev");
     var nx = document.getElementById("preset-next");

@@ -50,6 +50,12 @@ body {
   font: 11px/1 ui-monospace, Consolas, monospace;
 }
 #presetbar #preset-name::placeholder { color: #5a5a62; }
+#presetbar #preset-save {
+  width: auto; height: 18px; padding: 0 8px;
+  border: 1px solid #3a3a40; border-radius: 2px;
+  background: #1e1e22; color: #cfcfd2; font-size: 10px; cursor: pointer;
+}
+#presetbar #preset-save:hover { background: #2a2a30; }
 #preset-badge { margin-left: auto; color: #6b6b72; letter-spacing: .08em; }
 
 /* METER = OFF：表盘整体变暗 */
