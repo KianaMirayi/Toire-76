@@ -936,8 +936,6 @@ function needleTheta(t) {
     var p = NEEDLE_PHYS;
     p.raf = 1;
     var last = 0;
-    var w = NEEDLE_CFG.omega;
-    var z = NEEDLE_CFG.zeta;
     var h = 1.0 / 240.0;          // 固定子步长，避免大 dt 发散
 
     function step(ts) {
@@ -946,6 +944,9 @@ function needleTheta(t) {
       var dt = Math.min(0.05, (ts - last) / 1000);
       last = ts;
 
+      // 每帧读参数：滑块拖动时立刻生效
+      var w = NEEDLE_CFG.omega;
+      var z = NEEDLE_CFG.zeta;
       var n = Math.max(1, Math.round(dt / h));
       var sub = dt / n;
       for (var i = 0; i < n; i++) {
@@ -1027,6 +1028,7 @@ function needleTheta(t) {
         val.textContent = (r[0] === "zeta" ? NEEDLE_CFG[r[0]].toFixed(2) : Math.round(NEEDLE_CFG[r[0]])) + r[5];
         saveNeedleCfg();
         renderHud();
+        renderMeter();
       });
       wrap.appendChild(lab); wrap.appendChild(inp); wrap.appendChild(val);
       d.appendChild(wrap);
