@@ -1091,7 +1091,7 @@ function needleTheta(t) {
     sendPresetCmd("refresh");
   }
 
-  function renderHud() {  function renderHud() {
+  function renderHud() {
     if (!DEBUG) return;
     var hud = document.getElementById("hud");
     if (!hud) return;
