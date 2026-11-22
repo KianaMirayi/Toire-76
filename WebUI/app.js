@@ -395,6 +395,18 @@
                              "font-family": "Arial Narrow, Arial, sans-serif" });
         t.textContent = it.label; o.appendChild(t);
       });
+
+      // 相邻数字刻度之间的**步进小白点**（UAD 面板每 3 dB 一个点）
+      var pts = marks.map(function (it) { return { a: it.angle_cw, l: String(it.label) }; })
+                     .sort(function (x, y) { return x.a - y.a; });
+      for (var k = 0; k < pts.length; k++) {
+        var a0 = pts[k].a;
+        var a1 = (k + 1 < pts.length) ? pts[k + 1].a : pts[0].a + 360;
+        var mid = (a0 + a1) / 2;
+        var md = pt(cx, cy, 44, mid - 90);
+        o.appendChild(sv("circle", { cx: md[0].toFixed(2), cy: md[1].toFixed(2), r: 1.35,
+                                     fill: "#e9e9ec", opacity: .92 }));
+      }
     });
 
     ["knob_attack", "knob_release"].forEach(function (kid) {
