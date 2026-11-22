@@ -976,8 +976,13 @@ function needleTheta(t) {
     if (!state.power) {
       dbNow = -20;
     } else if (mode === 0) {
-      // GR：压缩量 dB（0..20）→ 表针 0..-20
-      dbNow = -(state.gr || 0);
+      // GR：线性满量程映射（表盘内圈 GR 刻度 0→100 即 0→20 dB）
+      // 0 dB = 最右（t=1）、20 dB = 最左（t=0）
+      var g = Math.max(0, Math.min(20, state.gr || 0));
+      var tGr = 1 - g / 20;
+      var thGr = needleTheta(tGr);
+      needleSetTarget(parseFloat(thGr.toFixed(2)), mode);
+      return;
     } else if (mode === 1 || mode === 2) {
       // +8/+4：输出峰值电平（dBFS）直接读；本插件输出满度 ≈ 0 dBFS
       var outDb = (typeof state.outDb === "number" && isFinite(state.outDb)) ? state.outDb : -100;
@@ -998,7 +1003,8 @@ function needleTheta(t) {
     var rows = [
       ["omega", "上升 ω", 2, 40, 0.1, "rad/s"],
       ["zeta",  "阻尼 ζ", 0.15, 1.5, 0.01, ""],
-      ["relMs", "释放(ms)", 20, 2000, 10, "ms"]
+      ["relMs", "释放(ms)", 20, 2000, 10, "ms"],
+      ["grRelMs", "GR回落", 0, 800, 10, "ms"]
     ];
     rows.forEach(function (r) {
       var wrap = el("div", { "class": "trow" });
@@ -1009,6 +1015,7 @@ function needleTheta(t) {
       val.textContent = (r[0] === "zeta" ? NEEDLE_CFG[r[0]].toFixed(2) : Math.round(NEEDLE_CFG[r[0]])) + r[5];
       inp.addEventListener("input", function () {
         NEEDLE_CFG[r[0]] = parseFloat(inp.value);
+        if (r[0] === "grRelMs") { state.smoothGr = undefined; }
         val.textContent = (r[0] === "zeta" ? NEEDLE_CFG[r[0]].toFixed(2) : Math.round(NEEDLE_CFG[r[0]])) + r[5];
         saveNeedleCfg();
         renderHud();
