@@ -886,7 +886,22 @@ function needleTheta(t) {
 
   /* 指针动画：只在「切换 GR / +8 / +4 / OFF」时用弹簧-阻尼滑过去；
      同档内的数值变化直接落位（将来由 DSP 自己的 attack/release 弹道驱动）*/
-  var NEEDLE_PHYS = { cur: null, vel: 0, target: 0, raf: 0, k: 260, c: 22, mode: -1, stop: false };
+  var NEEDLE_PHYS = { cur: null, vel: 0, target: 0, raf: 0, mode: -1, stop: false };
+
+  /* 表针可调参数（调试面板里实时改，localStorage 记忆）
+       omega : 上升速度（rad/s）—— 越大越快
+       zeta  : 阻尼比 —— 越小过冲越多、越"晃"
+       atkMs : 电平表攻击时间（毫秒）
+       relMs : 电平表释放时间（毫秒）
+       grRel : GR 档指针回落时间（毫秒，0=不额外平滑） */
+  var NEEDLE_CFG = { omega: 9.0, zeta: 0.72, atkMs: 5, relMs: 300, grRelMs: 220 };
+  try {
+    var _saved = JSON.parse(window.localStorage.getItem("t76needle") || "{}");
+    for (var _k in NEEDLE_CFG) if (typeof _saved[_k] === "number" && isFinite(_saved[_k])) NEEDLE_CFG[_k] = _saved[_k];
+  } catch (e) {}
+  function saveNeedleCfg() {
+    try { window.localStorage.setItem("t76needle", JSON.stringify(NEEDLE_CFG)); } catch (e) {}
+  }
 
   function needleApply(deg) {
     var blade = document.getElementById("needle-blade");
@@ -897,40 +912,43 @@ function needleTheta(t) {
 
   function needleSetTarget(thetaDeg, mode) {
     var p = NEEDLE_PHYS;
-    if (p.cur === null) p.cur = thetaDeg;
-    if (mode !== p.mode) {
-      p.mode = mode;
-      if (mode === 0) { p.k = 700; p.c = 38; }        // GR：约 0.35s
-      else if (mode === 1 || mode === 2) { p.k = 420; p.c = 30; }  // +8/+4：约 0.45s
-      else { p.k = 300; p.c = 28; }                   // OFF：约 0.55s
-      p.target = thetaDeg;
-      p.stop = false;
-      if (!p.raf) needleLoop();
-      return;
-    }
-    // 同档：直接落位，不做插值（但动画进行中一律忽略，避免被重复 render 打断）
-    if (p.raf) return;
+    if (p.cur === null) { p.cur = thetaDeg; p.vel = 0; needleApply(p.cur); }
+    p.mode = mode;
     p.target = thetaDeg;
-    p.cur = thetaDeg;
-    p.vel = 0;
-    needleApply(p.cur);
+    if (!p.raf) { p.stop = false; needleLoop(); }
   }
 
   function needleLoop() {
-    NEEDLE_PHYS.raf = 1;
+    var p = NEEDLE_PHYS;
+    p.raf = 1;
     var last = 0;
+    var w = NEEDLE_CFG.omega;
+    var z = NEEDLE_CFG.zeta;
+    var h = 1.0 / 240.0;          // 固定子步长，避免大 dt 发散
+
     function step(ts) {
-      var p = NEEDLE_PHYS;
       if (p.stop) { p.raf = 0; p.stop = false; return; }
-      if (!last) last = ts;
+      if (!last) { last = ts; requestAnimationFrame(step); return; }
       var dt = Math.min(0.05, (ts - last) / 1000);
       last = ts;
-      var a = -p.k * (p.cur - p.target) - p.c * p.vel;
-      p.vel += a * dt;
-      p.cur += p.vel * dt;
+
+      var n = Math.max(1, Math.round(dt / h));
+      var sub = dt / n;
+      for (var i = 0; i < n; i++) {
+        var a = w * w * (p.target - p.cur) - 2 * z * w * p.vel;
+        p.vel += a * sub;
+        p.cur += p.vel * sub;
+      }
       needleApply(p.cur);
-      var settled = Math.abs(p.vel) < 0.02 && Math.abs(p.cur - p.target) < 0.02;
-      if (settled) { p.vel = 0; p.cur = p.target; needleApply(p.cur); p.raf = 0; return; }
+
+      var settled = Math.abs(p.vel) < 0.35 && Math.abs(p.cur - p.target) < 0.06;
+      if (settled) {
+        p.vel = 0;
+        p.cur = p.target;
+        needleApply(p.cur);
+        p.raf = 0;
+        return;
+      }
       requestAnimationFrame(step);
     }
     requestAnimationFrame(step);
@@ -946,7 +964,8 @@ function needleTheta(t) {
     hud.textContent =
       "IN  " + state.input.toFixed(3) + "  " + inDb.toFixed(1) + " dB  " + inTh.toFixed(0) + "°\n" +
       "OUT " + state.output.toFixed(3) + "  " + outDb.toFixed(1) + " dB\n" +
-      "GR  " + state.gr.toFixed(1) + " dB";
+      "GR  " + state.gr.toFixed(1) + " dB\n" +
+      "ω " + NEEDLE_CFG.omega.toFixed(1) + "  ζ " + NEEDLE_CFG.zeta.toFixed(2) + "  释放 " + Math.round(NEEDLE_CFG.relMs) + " ms";
   }
 
   /* VU 表针：GR 档读压缩量（0 在右、-20 在左），+8/+4 档读输出电平，OFF 停最左 */
@@ -967,6 +986,35 @@ function needleTheta(t) {
     var t = (vuThetaForDb(dbNow) + 49.13) / 100.29;
     if (t < 0) t = 0; if (t > 1) t = 1;
     needleSetTarget(parseFloat(needleTheta(t).toFixed(2)), mode);
+  }
+
+  /* 表针参数调试面板（仅 DEBUG）：ω / ζ / 释放时间，实时生效并记忆 */
+  function buildTuner() {
+    if (!DEBUG) return;
+    if (document.getElementById("tuner")) return;
+    var d = el("div", { id: "tuner" });
+    var rows = [
+      ["omega", "上升 ω", 2, 30, 0.5, "rad/s"],
+      ["zeta",  "阻尼 ζ", 0.15, 1.5, 0.01, ""],
+      ["relMs", "释放(ms)", 20, 2000, 10, "ms"]
+    ];
+    rows.forEach(function (r) {
+      var wrap = el("div", { "class": "trow" });
+      var lab = el("span"); lab.textContent = r[1];
+      var inp = el("input", { type: "range", min: r[2], max: r[3], step: r[4] });
+      inp.value = NEEDLE_CFG[r[0]];
+      var val = el("span"); val.className = "tval";
+      val.textContent = (r[0] === "zeta" ? NEEDLE_CFG[r[0]].toFixed(2) : Math.round(NEEDLE_CFG[r[0]])) + r[5];
+      inp.addEventListener("input", function () {
+        NEEDLE_CFG[r[0]] = parseFloat(inp.value);
+        val.textContent = (r[0] === "zeta" ? NEEDLE_CFG[r[0]].toFixed(2) : Math.round(NEEDLE_CFG[r[0]])) + r[5];
+        saveNeedleCfg();
+        renderHud();
+      });
+      wrap.appendChild(lab); wrap.appendChild(inp); wrap.appendChild(val);
+      d.appendChild(wrap);
+    });
+    document.body.appendChild(d);
   }
 
   function render() {
@@ -1082,10 +1130,25 @@ function needleTheta(t) {
 
       // 实时 GR + 输入/输出电平（30 Hz，来自音频线程的原子量）
       window.__JUCE__.backend.addEventListener("toire76Meter", function (payload) {
+        var nowT = (window.performance && performance.now) ? performance.now() : Date.now();
+        var dts = Math.max(0.004, Math.min(0.2, (nowT - (state._lastT || nowT)) / 1000));
+        state._lastT = nowT;
+
         if (payload && payload.length >= 3) {
-          state.gr      = parseFloat(payload[0]) || 0;
-          state.inDb    = parseFloat(payload[1]);
-          state.outDb   = parseFloat(payload[2]);
+          var rawGr  = parseFloat(payload[0]) || 0;
+          var rawOut = parseFloat(payload[2]);
+          // 电平：攻击快、释放慢（时间可调）
+          var aAtk = 1 - Math.exp(-dts / Math.max(0.001, NEEDLE_CFG.atkMs / 1000));
+          var aRel = 1 - Math.exp(-dts / Math.max(0.001, NEEDLE_CFG.relMs / 1000));
+          if (typeof state.smoothOutDb !== "number" || !isFinite(state.smoothOutDb)) state.smoothOutDb = rawOut;
+          state.smoothOutDb += (rawOut - state.smoothOutDb) * (rawOut > state.smoothOutDb ? aAtk : aRel);
+          state.outDb = state.smoothOutDb;
+          state.inDb  = parseFloat(payload[1]);
+          // GR 档指针回落（可调）：上升立即、回落按 grRelMs
+          var aGrRel = 1 - Math.exp(-dts / Math.max(0.02, NEEDLE_CFG.grRelMs / 1000));
+          if (typeof state.smoothGr !== "number" || !isFinite(state.smoothGr)) state.smoothGr = rawGr;
+          state.smoothGr += (rawGr - state.smoothGr) * (rawGr > state.smoothGr ? 1 : aGrRel);
+          state.gr = state.smoothGr;
         } else if (payload && payload.length) {
           state.gr = parseFloat(payload[0]) || 0;
         }
@@ -1120,6 +1183,7 @@ function boot() {
     buildButtons();
     buildNeedle();
     buildToggles();
+  buildTuner();
     bindParams();
     render();
     fit();

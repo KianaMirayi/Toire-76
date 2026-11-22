@@ -317,20 +317,9 @@ void TOIRE76AudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
 
     auto toDb = [] (float rms) { return juce::Decibels::gainToDecibels (juce::jmax (rms, 1.0e-6f), -100.0f); };
 
-    const float blockSecs = (float) numSamples / (float) juce::jmax (1.0, getSampleRate());
-    const float relCoef  = std::exp (-blockSecs / 0.30f);          // 300 ms 回落
-    auto smooth = [] (float prev, float now, float rc)
-    {
-        return now > prev ? now : prev * rc + now * (1.0f - rc);   // 快起慢落
-    };
-
-    const float inRms  = toDb (inRmsLinear);
-    const float outRms = toDb (outputRms());
-    meterInRmsDb  = smooth (meterInRmsDb,  inRms,  relCoef);
-    meterOutRmsDb = smooth (meterOutRmsDb, outRms, relCoef);
-
-    meterInDb.store  (meterInRmsDb,  std::memory_order_relaxed);
-    meterOutDb.store (meterOutRmsDb, std::memory_order_relaxed);
+    // 原始 RMS 直送前端：表针的上升/阻尼/释放全部在 JS 里可调（调试面板）
+    meterInDb.store  (toDb (inRmsLinear),   std::memory_order_relaxed);
+    meterOutDb.store (toDb (outputRms()),   std::memory_order_relaxed);
 }
 
 //==============================================================================
