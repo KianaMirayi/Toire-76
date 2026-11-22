@@ -101,6 +101,20 @@ public:
     static constexpr double kAllDetScale = 4.0;
 
     static constexpr double kDetKnob[4] = {0.00, 0.34, 0.67, 1.00};
+    // ── 2026-11-23：试过、但**没有采用**的 attack 重标（留给下一轮）──────────
+    //
+    // Compressor76 加上"音头充电上限"以后，音头峰值只由前 1 ms 内 vc/u 能爬多快
+    // 决定，旧表在 −6 dBFS 硬切上的过冲量变成 19.8 / 20.3 / 20.3 / 12.7 dB
+    // （目标 17.9 / 15.2 / 12.0 / 5.5）。用探针扫 (detTau × tauAtk) 反解出一张
+    // 能命中的表：
+    //     detTau = {170, 70, 31, 7} µs,  tauAtk = {10, 12, 10, 8} µs
+    //     → 过冲 18.26 / 16.42 / 12.67 / 5.99 dB（实测，全部落在 ±1.5 内）
+    //
+    // 但它会让真实素材的瞬态压得更死：16 段素材综合相似度 82.2% → 78.5%，
+    // crest 偏差 −0.5 → −2.3 dB（参考实现用"快 attack + 更快的节目相关释放"
+    // 达到同样的过冲，而我们的释放被 17-release-deep 的 t63 钉住，不能跟着快）。
+    // 所以最终**保留原表**；要同时拿下过冲量和素材相似度，得先解决
+    // "短过载释放"这条线，而不是继续加快 attack。
     static constexpr double kDetTau[4] = {4400e-6, 580e-6, 580e-6, 31e-6};
 
     // 真静音回落 τ 的标定系数（乘在 release 的 fast 端上）。
@@ -253,6 +267,8 @@ public:
         attackNorm_ = attackNorm;
         releaseNorm_ = releaseNorm;
         // 过冲量标定表：knob → τ_attack（µs）
+        // 2026-11-23：与 kDetTau 一起试过重标（{10,12,10,8}），能命中过冲目标
+        // 但素材相似度掉 3.7 个点，已回退；理由见 kDetTau 上方注释。
         static const double ax[4] = {0.00, 0.34, 0.67, 1.00};
         static const double ay[4] = {3000.0, 317.0, 88.0, 10.0};
         double lus = std::log(ay[3]);
@@ -368,13 +384,21 @@ public:
     /**
      * @param sampleAfterGR  压缩之后的样本（反馈取样点）
      * @param inputLevel     压缩**之前**的 |x|（可选；只用来看"信号还在不在"）
+     * @param vcCap          本样本允许的**充电上限**（<0 = 不设限）。
      *
      * 为什么需要 inputLevel：判断"真静音"不能用压缩之后的电平 —— 低电平信号
      * 被压到阈值以下时，压缩后的整流值本来就恒为 0，那会误判成静音，把 GR 慢慢
      * 放掉（静态曲线在低电平段被抬高 8 dB，实测过）。只有压缩前的电平才知道
      * "信号到底还在不在"。
+     *
+     * 为什么需要 vcCap：反馈环在硬阶跃上会先看到"还没被压下去"的干电平 r，
+     * 而 r 比稳态需求大一两个数量级 → 两个电容都朝干电平冲，vc 撞到 anti-windup
+     * 天花板（40 dB），等 GR 建立、r 塌下去，只能按 release 慢慢退回稳态 ——
+     * 这就是"音头先被压死再放开"的泵感（−20 dBFS 硬切时音头 GR 比稳态高 12 dB）。
+     * 上限由 Compressor76 用「当前输入峰值 → 环路稳态不动点」算好传进来，
+     * 只限制**充电方向**，绝不强制放电（放电仍走 release），所以 release 标定不变。
      */
-    double process(double sampleAfterGR, double inputLevel = 0.0) {
+    double process(double sampleAfterGR, double inputLevel = 0.0, double vcCap = -1.0) {
         // ── NaN/Inf 兜底（入口）─────────────────────────────────────────
         // 上游一个坏样本（Inf / NaN：前级插件崩溃恢复、未初始化缓冲、参数跳变）
         // 会顺着 rectify() 灌进 vcFast_/vcSlow_，再经 control() 进 uPrev_。
@@ -439,13 +463,30 @@ public:
             const double hi = std::clamp((x - kRelHiX0) / (1.0 - kRelHiX0), 0.0, 1.0);
             relFast = tauRelFast_ * (1.0 - kRelHiDrop * hi);
         }
-        const double tauF = (r > vcFast_) ? detTau_ * allDetScale_ : relFast;
-        vcFast_ += (r - vcFast_) * coef(tauF);
+        // ⓪c 充电上限（vcCap）：只限制"往干电平充"这一步。
+        //   没有上限时 r 比稳态需求大 1–2 个数量级，vc 在 1 ms 内就撞到
+        //   anti-windup 天花板（u=1，≈40 dB GR），随后只能按 release 退回 ——
+        //   即"音头先被压死再放开"。注意：**不强制放电**（r < vc 时照常走
+        //   release，标定不变）；被上限挡住时保持，交给 release 自然回落。
+        double rFast = r;
+        if (vcCap >= 0.0 && rFast > vcCap)
+            rFast = vcCap;
+        if (rFast > vcFast_)
+            vcFast_ += (rFast - vcFast_) * coef(detTau_ * allDetScale_);
+        else if (r < vcFast_)
+            vcFast_ += (r - vcFast_) * coef(relFast);
 
         // ② C_slow：慢充 / 慢放。b 秒持续过载后充到 (1−e^{−b/T})，
         //    释放时由它拖住 —— 这就是节目相关性。
-        const double tauS = (rPeak_ > vcSlow_) ? chargeTauSec(releaseNorm_) : tauRelSlow_;
-        vcSlow_ += (rPeak_ - vcSlow_) * coef(tauS);
+        //    充电目标也受 vcCap 限制（长过载时不让慢电容继续灌到天花板）；
+        //    它的 τ 是 0.4–0.75 s，音头前 70 ms 只充进 5–10%，所以不影响瞬态过压。
+        double rSlow = rPeak_;
+        if (vcCap >= 0.0 && rSlow > vcCap)
+            rSlow = vcCap;
+        if (rSlow > vcSlow_)
+            vcSlow_ += (rSlow - vcSlow_) * coef(chargeTauSec(releaseNorm_));
+        else if (rPeak_ < vcSlow_)
+            vcSlow_ += (rPeak_ - vcSlow_) * coef(tauRelSlow_);
 
         // ③ 取大：谁拖后腿谁决定释放
         //    anti-windup：两个电容都不允许超过饱和电平，否则深度过载会积压过量电荷，
@@ -547,6 +588,13 @@ public:
         return uPrev_;
     }
 
+    /** 调试用：直接覆盖两个 attack 时间常数（探针标定 attack 旋钮映射时用） */
+    void setDebugAttackTaus(double tauAtkSec, double detTauSec)
+    {
+        tauAtk_ = tauAtkSec;
+        detTau_ = detTauSec;
+    }
+
     // ---- 观测 ----
     double tauAttack() const { return tauAtk_; }
     double tauFastMs() const { return tauRelFast_ * 1000.0; }
@@ -560,6 +608,11 @@ public:
     double vcRaw() const { return vc_; }
     double vcFastRaw() const { return vcFast_; }
     double vcSlowRaw() const { return vcSlow_; }
+    double vcCeil() const { return vcCeil_; }
+    double inPeakRaw() const { return inPeak_; }
+    double rPeakRaw() const { return rPeak_; }
+    double uRaw() const { return uPrev_; }
+    double detTau() const { return detTau_; }
     int ratio() const { return ratio_; }
     double ratioTarget() const { return ratioTarget_; }
     double biasPeak() const { return bias_; }

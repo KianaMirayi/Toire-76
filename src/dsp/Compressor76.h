@@ -35,7 +35,7 @@ public:
         side_.setAttenuationDb(inputDb_);
     }
 
-    void reset() { side_.reset(); vcPrev_ = 0.0; }
+    void reset() { side_.reset(); vcPrev_ = 0.0; onsetPeak_ = 0.0; capRefPeak_ = 0.0; onsetCap_ = 0.0; }
 
     // ---- 参数（物理量；面板 taper 待实测后用 PluginProcessor 换算）----
     void setInputDb(double dB) {
@@ -72,10 +72,12 @@ public:
         }
 
         const double xin = x * inputGain_;
+        const double inAbs = std::abs(xin);
+        updateOnsetPeak(inAbs);
         const double g = fet_.gain(vcPrev_);
         const double yGr = xin * g;
 
-        const double vc = side_.process(yGr, std::abs(xin));
+        const double vc = side_.process(yGr, inAbs, onsetVcCap());
         vcPrev_ = side_.control(vc);
 
         return finiteClamp(softClip(yGr * preampGain_ * outputGain_));
@@ -104,8 +106,10 @@ public:
         const double yr = xr * g;
 
         // 侧链输入取两声道峰值的较大者（整流器内部取绝对值）
+        const double inAbs = std::max(std::abs(xl), std::abs(xr));
         const double sc = std::max(std::abs(yl), std::abs(yr));
-        const double vc = side_.process(sc, std::max(std::abs(xl), std::abs(xr)));
+        updateOnsetPeak(inAbs);
+        const double vc = side_.process(sc, inAbs, onsetVcCap());
         vcPrev_ = side_.control(vc);
 
         const double make = preampGain_ * outputGain_;
@@ -126,8 +130,102 @@ public:
     Sidechain& sidechain() { return side_; }
 
 private:
+    // ── 音头充电上限（2026-11-23）─────────────────────────────────────
+    //
+    // 症状：−20 dBFS 硬切、attack=0 时，音头 20–70 ms 的 GR 比稳态高 12.4 dB
+    // （参考 −0.8）；听感是"音头先被压死、再放开"。
+    //
+    // 机理（探针逐样本确认）：反馈取样在 GR 之后，阶跃到来时 GR 还没建立，
+    // 侧链看到的是**干电平**（比稳态需求大 1–2 个数量级），两个电容都朝它冲，
+    // vc 在 1 ms 内撞到 anti-windup 天花板（u=1，≈40 dB），而环路真正的稳态
+    // 需求只有 21.7 dB；等 GR 建立、r 塌下去，vc 只能按 release（≈0.7 s）
+    // 慢慢退回 —— 这 300 ms 的"深压 → 回放"就是泵感。
+    //
+    // 修法：每一刻都用「当前输入峰值 → 环路稳态不动点」算一个 vc 上限，
+    // 只允许电容**充到这个上限**（不强制放电，放电仍走 release）。
+    // 不动点方程（稳态峰值检波）：
+    //     vc = p·gain(u(vc)) − bias
+    //     u(vc) = clamp((R−1)·20log10(1+vc/bias)/29, 0, 1)
+    // 单调，用二分求解；p 用 50 ms 保持的输入峰值（1 kHz 一个周期只掉 1%）。
+    //
+    // 为什么不影响静态曲线 / release 标定：
+    //   · 稳态时 vc 本来就收敛到同一个不动点，上限不改变结果（只挡"冲过头"）；
+    //   · 下降沿 r < vc 时走原来的 release，没有任何强制放电；
+    //   · 上限只依赖输入峰值，与 release 旋钮无关。
+    static constexpr bool   kOnsetCapEnabled = true;
+    static constexpr double kOnsetPeakTauSec = 0.050;   // 输入峰值保持
+    static constexpr double kOnsetCapMargin  = 1.02;    // >1 = 给上限留余量
+
+    void updateOnsetPeak(double inAbs)
+    {
+        if (inAbs > onsetPeak_)
+            onsetPeak_ = inAbs;
+        else if (onsetPeak_ > 0.0)
+            onsetPeak_ -= onsetPeak_ * (1.0 - std::exp(-1.0 / (sr_ * kOnsetPeakTauSec)));
+    }
+
+    /** 当前输入峰值对应的「环路稳态 vc」；<0 表示本样本不设限 */
+    double onsetVcCap()
+    {
+        if (! kOnsetCapEnabled)
+            return -1.0;
+        const double p = onsetPeak_;
+        if (p <= 0.0)
+        {
+            capRefPeak_ = 0.0;
+            onsetCap_ = 0.0;
+            return 0.0;
+        }
+        // 峰值每变 0.2 dB 才重算（稳态下每周期都会有极小的新峰）
+        if (capRefPeak_ > 0.0)
+        {
+            const double dDb = 20.0 * std::log10(p / capRefPeak_);
+            if (std::abs(dDb) < 0.2)
+                return onsetCap_;
+        }
+        capRefPeak_ = p;
+
+        const double bias = std::max(side_.biasPeak(), 1e-12);
+        const double rt   = side_.ratioTarget();
+        const double span = Sidechain::kFetSpanDb;
+        const double floorVc = 0.0;
+        const double ceilVc  = side_.vcCeil();
+
+        const auto residual = [&] (double vc)
+        {
+            const double dBabove = 20.0 * std::log10(1.0 + vc / bias);
+            const double u = std::clamp((rt - 1.0) * dBabove / span, 0.0, 1.0);
+            return p * fet_.gain(u) - bias - vc;
+        };
+
+        double cap;
+        if (residual(floorVc) <= 0.0)
+        {
+            cap = 0.0;                    // 连阈值都没到：不需要压缩
+        }
+        else if (residual(ceilVc) > 0.0)
+        {
+            cap = ceilVc;                 // 太热：满行程都不够，交给 anti-windup
+        }
+        else
+        {
+            double lo = floorVc, hi = ceilVc;
+            for (int i = 0; i < 40; ++i)
+            {
+                const double mid = 0.5 * (lo + hi);
+                if (residual(mid) > 0.0) lo = mid; else hi = mid;
+            }
+            cap = 0.5 * (lo + hi);
+        }
+        onsetCap_ = cap * kOnsetCapMargin;
+        return onsetCap_;
+    }
+
     // 整机增益：45 dB（手册）+ 1.96 dB 标定差 - 2.71 dB（低电平段 make-up 对齐参考插件）
-    static constexpr double kTotalGainDb = 45.25;   // 整机 45 dB ±1【1965 p.7】
+    // 2026-11-23：再 −1.20 dB。音头充电上限生效后，GR 比原来浅 ~1.2 dB，
+    // 素材整体电平随之抬高；实测 16 段素材的 RMS 偏差从 +1.21 dB 回到 +0.01 dB
+    // （crest 不受影响）。这一项只改绝对电平，不改 GR / 压缩比 / 释放 / 延迟。
+    static constexpr double kTotalGainDb = 44.05;   // 整机 45 dB ±1【1965 p.7】
 
     static double dbToLin(double dB) { return std::pow(10.0, dB / 20.0); }
     static double db(double lin) { return 20.0 * std::log10(std::max(lin, 1e-12)); }
@@ -158,6 +256,9 @@ private:
     int ratio_ = 0;
     bool power_ = true;
     double vcPrev_ = 0.0;
+    double onsetPeak_ = 0.0;      // 输入峰值保持（50 ms）→ 算充电上限
+    double capRefPeak_ = 0.0;     // 上次算上限用的峰值
+    double onsetCap_ = 0.0;       // 当前充电上限（vc 单位）
     bool   bypassComp_ = false;
 
     FetModel fet_;
