@@ -141,7 +141,7 @@ body {
 
 /* 表针参数调试面板（仅 DEBUG） */
 #tuner {
-  position: absolute; right: 6px; bottom: 2px;
+  position: absolute; left: 618px; bottom: 2px;
   width: 196px; padding: 3px 6px;
   background: rgba(0,0,0,.72); border: 1px solid #2a5; border-radius: 3px;
   font: 9px/1.25 ui-monospace, Consolas, monospace; color: #7ef0a0;

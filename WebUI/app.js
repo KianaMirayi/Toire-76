@@ -976,13 +976,9 @@ function needleTheta(t) {
     if (!state.power) {
       dbNow = -20;
     } else if (mode === 0) {
-      // GR：线性满量程映射（表盘内圈 GR 刻度 0→100 即 0→20 dB）
-      // 0 dB = 最右（t=1）、20 dB = 最左（t=0）
-      var g = Math.max(0, Math.min(20, state.gr || 0));
-      var tGr = 1 - g / 20;
-      var thGr = needleTheta(tGr);
-      needleSetTarget(parseFloat(thGr.toFixed(2)), mode);
-      return;
+      // GR：直接按 VU 刻度读数 —— 压缩 10 dB 就指在表盘 "-10" 位置
+      // （UAD 的 GR 表就是同一块 VU 表盘，指针读的是"负的压缩量"）
+      dbNow = -(state.gr || 0);
     } else if (mode === 1 || mode === 2) {
       // +8/+4：输出峰值电平（dBFS）直接读；本插件输出满度 ≈ 0 dBFS
       var outDb = (typeof state.outDb === "number" && isFinite(state.outDb)) ? state.outDb : -100;
