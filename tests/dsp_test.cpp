@@ -19,8 +19,10 @@
 #include <string>
 #include <vector>
 #include <algorithm>
+#include <limits>
 
 #include "../src/dsp/Compressor76.h"
+#include "../src/dsp/LatencyPlan.h"
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -93,6 +95,30 @@ int main(int argc, char** argv) {
     // 构建身份：确认跑的是刚编出来的二进制（我们踩过 stale object 的坑）
     std::printf("build: %s %s | release model: %s\n",
                 __DATE__, __TIME__, Sidechain::kReleaseModel);
+
+    // ══════════════════════════════════════════════════════════════════
+    //  0) 延迟计划（M1 的回归锁）
+    //
+    //  上报给宿主的 latencySamples 必须等于 src/dsp/LatencyPlan.h 的
+    //  targetLatencySamples()，而后者就是文档里的值：
+    //      44.1k / 48k → 86     96k → 118     192k → 151
+    //  这三档是**实测值**（相位互相关，脉冲输入），不是 86·sr/48k。
+    //  v0.1.0 的 bug 是 `86.0 * (sr/48000.0) * 0.0 + 86` 再 +1 → 实际上报 87，
+    //  且采样率缩放是死代码。这里把 48k = 86 钉死。
+    // ══════════════════════════════════════════════════════════════════
+    int latencyFails = 0;
+    {
+        const double srs[4]  = {44100.0, 48000.0, 96000.0, 192000.0};
+        const int    want[4] = {86, 86, 118, 151};
+        std::printf("\n=== 0) 延迟计划（src/dsp/LatencyPlan.h）===\n");
+        for (int i = 0; i < 4; ++i) {
+            const int got = toire76::targetLatencySamples(srs[i]);
+            const bool ok = (got == want[i]);
+            if (!ok) ++latencyFails;
+            std::printf("  %7.0f Hz -> %3d samples (want %3d)  %s\n",
+                        srs[i], got, want[i], ok ? "PASS" : "FAIL");
+        }
+    }
 
     FILE* csv = std::fopen((outDir + "/static_curve.csv").c_str(), "w");
     if (csv) std::fprintf(csv, "ratio,input_db,gr_db\n");
@@ -556,6 +582,65 @@ int main(int argc, char** argv) {
         }
     }
 
+    // ══════════════════════════════════════════════════════════════════
+    //  8) NaN / Inf 兜底（M5）
+    //
+    //  v0.1.0 的问题：vcFast_/vcSlow_/uPrev_ 一旦吃到 NaN/Inf，std::clamp 与
+    //  所有比较对 NaN 恒为 false，指数衰减也拉不回来 → 插件**永久**输出 NaN
+    //  或静音。修法是 Sidechain::process()/control() 入口与出口都做
+    //  std::isfinite 检查（复位并返回 0），Compressor76 输出再做 ±4 兜底。
+    //  这里验证：一个 NaN / 一个 +Inf 之后，输出必须是有限值，且 GR 能重建。
+    // ══════════════════════════════════════════════════════════════════
+    {
+        std::printf("\n=== 8) NaN/Inf 兜底（M5）===\n");
+
+        Compressor76 c;
+        c.setInputDb(0.0);
+        c.setOutputDb(-12.90);
+        c.setRatioIndex(3);
+        c.setAttackNorm(0.5);
+        c.setReleaseNorm(0.666);
+        c.prepare(SR);
+        c.reset();
+
+        auto drive = [&c] (int n, double& rms, int& nonFinite) {
+            double sum = 0.0;
+            nonFinite = 0;
+            for (int i = 0; i < n; ++i) {
+                const double x = dbToLin(-6.0) * std::sin(2.0 * M_PI * 1000.0 * i / SR);
+                const double y = c.processSample(x);
+                if (!std::isfinite(y)) ++nonFinite;
+                sum += y * y;
+            }
+            rms = std::sqrt(sum / std::max(n, 1));
+        };
+
+        double rmsBefore = 0.0;
+        int bad = 0;
+        drive(int(SR * 0.3), rmsBefore, bad);
+        const double grBefore = c.grDb();
+
+        const double yNaN = c.processSample(std::nan(""));
+        const double yInf = c.processSample(std::numeric_limits<double>::infinity());
+
+        double rmsAfter = 0.0;
+        drive(int(SR * 0.3), rmsAfter, bad);
+        const double grAfter = c.grDb();
+
+        std::printf("  坏样本前 : GR %6.2f dB, RMS %6.2f dBFS\n", grBefore, linToDb(rmsBefore));
+        std::printf("  NaN 输入 : 输出 %8.4f（应有限；NaN 兜底 = 0）\n", yNaN);
+        std::printf("  +Inf 输入: 输出 %8.4f（应有限；软限幅 + ±4 兜底）\n", yInf);
+        std::printf("  之后 300ms: GR %6.2f dB, RMS %6.2f dBFS, 非有限输出 %d 个\n",
+                    grAfter, linToDb(rmsAfter), bad);
+
+        const bool ok = std::isfinite(yNaN) && std::isfinite(yInf) && bad == 0
+                     && std::isfinite(grAfter) && rmsAfter > 1e-3;
+        std::printf("  %s\n", ok ? "PASS" : "FAIL");
+        if (!ok) ++latencyFails;   // 复用同一个失败计数（退出码非 0）
+    }
+
     std::printf("\n结果已写入 %s\n", outDir.c_str());
-    return 0;
+    if (latencyFails != 0)
+        std::printf("!! 延迟计划断言失败 %d 项\n", latencyFails);
+    return latencyFails == 0 ? 0 : 1;
 }

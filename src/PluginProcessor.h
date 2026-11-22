@@ -81,12 +81,15 @@ private:
 
     int currentProgram = 0;
 
-    // 预设/参数跳变检测（切换预设时复位侧链）
-    float lastMeterIn_   = 0.2f;
-    float lastMeterRel_  = 0.666f;
-    float lastMeterAtk_  = 0.5f;
+    // 预设切换检测（M2）：本块 vs 上块有 **≥3 个**参数同时变化才复位侧链。
+    // 单旋钮拖动只变 1 个 → 不会在音频中途 reset；换预设会一次变 4–5 个 → 复位。
+    float lastMeterIn_    = 0.2f;
+    float lastMeterOut_   = 0.6259f;
+    float lastMeterRel_   = 0.666f;
+    float lastMeterAtk_   = 0.5f;
     int   lastMeterRatio_ = -1;
-    bool  hasMeterState_ = false;
+    int   lastMeterMeter_ = -1;
+    bool  hasMeterState_  = false;
     std::atomic<float>* powerParam   = nullptr;
     std::atomic<float>* bypassParam  = nullptr;
 
@@ -96,7 +99,8 @@ private:
     std::unique_ptr<juce::dsp::Oversampling<float>> oversampler;
     juce::AudioBuffer<float> oversampledBuffer;
 
-    /** 把总延迟补到参考值（48 kHz 下 86 samples），便于逐样本对齐比较 */
+    /** 把总延迟补齐到目标值（48k=86 / 96k=118 / 192k=151，见 dsp/LatencyPlan.h），
+        便于逐样本对齐比较；旁路时走的是同一条延迟线。 */
     std::unique_ptr<juce::dsp::DelayLine<float>> extraDelay;
     int latencySamples = 0;
 

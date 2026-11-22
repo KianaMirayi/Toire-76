@@ -1,6 +1,7 @@
 #include "PluginProcessor.h"
 
 #include "PluginEditor.h"
+#include "dsp/LatencyPlan.h"
 
 //==============================================================================
 namespace
@@ -195,9 +196,11 @@ void TOIRE76AudioProcessor::prepareToPlay (double sampleRate, int samplesPerBloc
                             ? (int) std::lround (oversampler->getLatencyInSamples())
                             : 0;
 
-    // 目标总延迟（48 kHz 下 86 samples，和参考实现对齐）；不足的用纯延迟补齐
-    const int targetLatency = (int) std::lround (86.0 * (sampleRate / 48000.0) * 0.0) + 86;
-    const int extra = juce::jmax (0, targetLatency - osLatency + 1);
+    // 目标总延迟（参考实现实测：44.1/48k = 86、96k = 118、192k = 151 samples）；
+    // 过采样器自身延迟不够的部分用纯延迟线补齐 → 实际补偿值 = 上报值。
+    // 公式与数值来源见 src/dsp/LatencyPlan.h（那边有逐采样率实测值）。
+    const int targetLatency = toire76::targetLatencySamples (sampleRate);
+    const int extra = juce::jmax (0, targetLatency - osLatency);
 
     extraDelay.reset();
     if (extra > 0)
@@ -215,6 +218,8 @@ void TOIRE76AudioProcessor::prepareToPlay (double sampleRate, int samplesPerBloc
     compressor.reset();
 
     latencySamples = osLatency + extra;
+    // 上报值 = 实际补偿值 = 文档值（86 @48k / 118 @96k / 151 @192k）
+    jassert (latencySamples == targetLatency);
     setLatencySamples (latencySamples);
     updateHostDisplay (juce::AudioProcessor::ChangeDetails().withLatencyChanged (true));
 }
@@ -247,23 +252,14 @@ void TOIRE76AudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
         return;
 
     const bool powered  = powerParam  == nullptr || powerParam->load()  > 0.5f;
-    // 输入 RMS（处理前量，供表针使用）
-    float inRmsLinear = 0.0f;
-    {
-        double sum = 0.0; int n = 0;
-        for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
-        {
-            const auto* d = buffer.getReadPointer (ch);
-            for (int i = 0; i < numSamples; ++i) { sum += (double) d[i] * (double) d[i]; ++n; }
-        }
-        inRmsLinear = n > 0 ? (float) std::sqrt (sum / (double) n) : 0.0f;
-    }
-
     const bool bypassed = bypassParam != nullptr && bypassParam->load() > 0.5f;
 
-    if (! powered || bypassed)
+    // ── 面板 POWER 关机 = 静音 ────────────────────────────────
+    // 产品决定（和真机"关机无输出"一致），**保留**。
+    // ⚠️ 宿主旁路不是这条路径：JUCE 的 getBypassParameter() 契约要求"bypass your
+    //    effects"（输出干声），不是静音 —— 见下面 bypassed 的处理。
+    if (! powered)
     {
-        // 关机 / 旁路：静音（直通也不做，保持和真实硬件的"关机无输出"一致）
         for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
             buffer.clear (ch, 0, numSamples);
 
@@ -275,34 +271,72 @@ void TOIRE76AudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     }
 
     // ── 参数 → 物理量 ─────────────────────────────────────────
+    // 旁路时也照常写入：这样取消旁路的那一块不会因为参数还是旧值而跳一下。
     compressor.setInputDb   (inputNormToDb   (inputParam   ? inputParam  ->load() : 0.2f));
     compressor.setOutputDb  (outputNormToDb  (outputParam  ? outputParam ->load() : 0.6259f));
     compressor.setAttackNorm (attackParam  ? attackParam  ->load() : 0.5f);
     compressor.setReleaseNorm(releaseParam ? releaseParam ->load() : 0.666f);
     compressor.setRatioIndex (ratioParam ? int (ratioParam->load() + 0.5f) : 0);
-    compressor.setPower (true);
 
-    // 预设/参数大跳变时复位侧链状态：否则会带着上一个预设积累的 GR 进入新设置，
-    // 表现为"切完预设前半秒压得不对"
+    // ── 宿主旁路 = 干声直通（不是静音）────────────────────────
+    // Compressor76 在 power_ == false 时原样返回输入（只挡 NaN/Inf，不碰侧链），
+    // 所以旁路只需关掉压缩这一级；**过采样器与延迟线照常跑**，于是：
+    //   · 输出是未压缩的干声（只是经过了线性相位的过采样滤波 + 纯延迟）；
+    //   · 延迟与正常模式**完全一致** → 宿主按 latencySamples 补偿时不会相位跳变。
+    // 旁路期间把侧链归零（reset 只是标量赋值，很便宜），取消旁路时从干净状态开始。
+    compressor.setPower (! bypassed);
+    if (bypassed)
+        compressor.reset();
+
+    // 预设切换检测（M2）：本块 vs 上块比较 6 个参数，**同时变化 ≥3 个**才复位侧链。
+    // 为什么要这样判：换预设会让 4–5 个参数一起跳；而用户拖单个旋钮只会改 1 个，
+    // 旧实现的"变化量阈值"（input>0.12 / attack·release>0.25 / ratio 变）两头不讨好——
+    // 相近预设（Drum Punch→Vocal，Δ 全在阈值内）不复位，快速拖 INPUT 反而在音频中途
+    // reset 出抽气声。阈值判断已删除。
     {
         const float inNow  = inputParam   ? inputParam->load()   : 0.2f;
+        const float outNow = outputParam  ? outputParam->load()  : 0.6259f;
         const float relNow = releaseParam ? releaseParam->load() : 0.666f;
         const float atkNow = attackParam  ? attackParam->load()  : 0.5f;
         const int   ratNow = ratioParam   ? int (ratioParam->load() + 0.5f) : 0;
+        const int   metNow = meterParam   ? int (meterParam->load() + 0.5f) : 0;
 
-        const bool jump = (std::abs (inNow - lastMeterIn_)  > 0.12f)
-                       || (std::abs (relNow - lastMeterRel_)> 0.25f)
-                       || (std::abs (atkNow - lastMeterAtk_)> 0.25f)
-                       || (ratNow != lastMeterRatio_);
+        if (hasMeterState_)
+        {
+            auto moved = [] (float a, float b) { return std::abs (a - b) > 1.0e-6f; };
 
-        if (jump && hasMeterState_)
-            compressor.reset();
+            int changed = 0;
+            changed += moved (inNow,  lastMeterIn_)   ? 1 : 0;
+            changed += moved (outNow, lastMeterOut_)  ? 1 : 0;
+            changed += moved (atkNow, lastMeterAtk_)  ? 1 : 0;
+            changed += moved (relNow, lastMeterRel_)  ? 1 : 0;
+            changed += (ratNow != lastMeterRatio_)    ? 1 : 0;
+            changed += (metNow != lastMeterMeter_)    ? 1 : 0;
 
-        lastMeterIn_ = inNow; lastMeterRel_ = relNow; lastMeterAtk_ = atkNow;
-        lastMeterRatio_ = ratNow; hasMeterState_ = true;
+            if (changed >= 3)
+                compressor.reset();
+        }
+
+        lastMeterIn_ = inNow;   lastMeterOut_ = outNow;
+        lastMeterAtk_ = atkNow; lastMeterRel_ = relNow;
+        lastMeterRatio_ = ratNow; lastMeterMeter_ = metNow;
+        hasMeterState_ = true;
     }
     // METER = OFF（第 4 档）→ 压缩旁通（与参考插件一致：打到 OFF 不再压缩）
     compressor.setCompressionBypass (meterParam != nullptr && int (meterParam->load() + 0.5f) == 3);
+
+    // 输入 RMS（处理前量，供表针使用）—— 旁路时表针要归零，不必算
+    float inRmsLinear = 0.0f;
+    if (! bypassed)
+    {
+        double sum = 0.0; int n = 0;
+        for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
+        {
+            const auto* d = buffer.getReadPointer (ch);
+            for (int i = 0; i < numSamples; ++i) { sum += (double) d[i] * (double) d[i]; ++n; }
+        }
+        inRmsLinear = n > 0 ? (float) std::sqrt (sum / (double) n) : 0.0f;
+    }
 
     // ── 处理（先升频，在内部 FSR 跑模型，再降频）────────────────
     if (oversampler != nullptr)
@@ -372,8 +406,18 @@ void TOIRE76AudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
         buffer.clear (ch, 0, numSamples);
 
     // 实时 GR + 电平（给编辑器的 HUD / 表针用）：音频线程只做原子写
-    grDbForUi.store (powered && ! bypassed ? (float) compressor.grDb() : 0.0f,
+    // 旁路时这三项一律归零（表针不动、HUD 不显示 GR），和处理链的实际状态一致。
+    grDbForUi.store (bypassed ? 0.0f : (float) compressor.grDb(),
                      std::memory_order_relaxed);
+
+    if (bypassed)
+    {
+        // 旁路：表针归零（干声直通，但没有"压缩量"可显示）
+        meterInRmsDb = meterOutRmsDb = -100.0f;
+        meterInDb.store (-100.0f, std::memory_order_relaxed);
+        meterOutDb.store (-100.0f, std::memory_order_relaxed);
+        return;
+    }
 
     // 表针用电平：**RMS**（VU 标准），并做 300 ms 快起慢落，避免逐块跳动
     auto outputRms = [&buffer, numSamples]

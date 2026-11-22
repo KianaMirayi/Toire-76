@@ -10,7 +10,9 @@ panel and a WebView2 UI.
 - **VU meter** with GR / +8 / +4 / OFF modes; the needle follows real gain reduction
 - **Preset bar**: six factory presets, plus save / recall of your own presets
   (`%APPDATA%\TOiRE-76\Presets\*.t76preset`)
-- Fixed **86 samples** reporting latency at 48 kHz (internal 2–4× oversampling)
+- Reporting latency **86 samples** (48 kHz), **118** (96 kHz), **151** (192 kHz);
+  the reported value equals the internal compensation (internal 2–4× oversampling)
+- Static MSVC runtime — no separate VC++ 2015-2022 redistributable needed
 
 ## Install
 

@@ -154,6 +154,14 @@ void TOIRE76AudioProcessorEditor::emitPresetList()
     webView->emitEventIfBrowserIsVisible ("toire76Presets", juce::var (list));
 }
 
+double TOIRE76AudioProcessorEditor::readDenorm (const char* paramID) const
+{
+    if (auto* p = processor.apvts.getParameter (paramID))
+        if (auto* raw = processor.apvts.getRawParameterValue (paramID))
+            return (double) p->convertFrom0to1 (raw->load());
+    return 0.0;
+}
+
 void TOIRE76AudioProcessorEditor::savePresetAs (const juce::String& suggestedName)
 {
     auto name = suggestedName.trim();
@@ -163,30 +171,41 @@ void TOIRE76AudioProcessorEditor::savePresetAs (const juce::String& suggestedNam
     auto chooser = std::make_shared<juce::FileChooser> ("保存预设",
         presetDir().getChildFile (name + ".t76preset"), "*.t76preset");
 
+    // ⚠️ launchAsync 的回调在**消息线程稍后**执行：从对话框打开到用户点"保存"
+    //    之间，宿主可能已经销毁/重建编辑器（关工程、删插件、切 track）。
+    //    所以：
+    //      1) 6 个参数值在**启动对话框之前**快照成局部值 —— 写文件不再碰 processor；
+    //      2) UI 刷新用 SafePointer 守卫 —— 编辑器活着才 emitPresetList()；
+    //      3) shared_ptr<FileChooser> 照旧捕获（那是必须的，不是泄漏）。
+    const double inV   = readDenorm ("input");
+    const double outV  = readDenorm ("output");
+    const double atkV  = readDenorm ("attack");
+    const double relV  = readDenorm ("release");
+    const double ratV  = readDenorm ("ratio");
+    const double metV  = readDenorm ("meter");
+
+    juce::Component::SafePointer<TOIRE76AudioProcessorEditor> safeThis (this);
+
     chooser->launchAsync (juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles,
-                          [this, chooser] (const juce::FileChooser& fc)
+                          [safeThis, chooser, inV, outV, atkV, relV, ratV, metV] (const juce::FileChooser& fc)
     {
         auto file = fc.getResult();
         if (file == juce::File()) return;
         if (! file.hasFileExtension ("t76preset")) file = file.withFileExtension ("t76preset");
 
         auto* obj = new juce::DynamicObject();
-        auto readParam = [this] (const char* id) -> double
-        {
-            if (auto* p = processor.apvts.getParameter (id))
-                if (auto* raw = processor.apvts.getRawParameterValue (id))
-                    return (double) p->convertFrom0to1 (raw->load());
-            return 0.0;
-        };
-        obj->setProperty ("input",   readParam ("input"));
-        obj->setProperty ("output",  readParam ("output"));
-        obj->setProperty ("attack",  readParam ("attack"));
-        obj->setProperty ("release", readParam ("release"));
-        obj->setProperty ("ratio",   readParam ("ratio"));
-        obj->setProperty ("meter",   readParam ("meter"));
+        obj->setProperty ("input",   inV);
+        obj->setProperty ("output",  outV);
+        obj->setProperty ("attack",  atkV);
+        obj->setProperty ("release", relV);
+        obj->setProperty ("ratio",   ratV);
+        obj->setProperty ("meter",   metV);
 
         file.replaceWithText (juce::JSON::toString (juce::var (obj), false));
-        emitPresetList();
+
+        // 只有编辑器还活着才刷新列表；已经析构就静默跳过（文件已经写好了）
+        if (auto* ed = safeThis.getComponent())
+            ed->emitPresetList();
     });
 }
 

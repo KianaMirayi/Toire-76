@@ -21,6 +21,27 @@ option(TOIRE76_WEBVIEW2 "Build with the WebView2 backend (Web UI)" ON)
 # ─────────────────────────────────────────────────────────────
 option(TOIRE76_NATIVE_DEMO "Build the native-JUCE UI POC (for WebView2 comparison)" OFF)
 
+# ─────────────────────────────────────────────────────────────
+# 静态链接 MSVC C 运行库（M4）
+#
+# 发布载荷 v0.1.0 的导入表里有 MSVCP140.dll / VCRUNTIME140.dll /
+# VCRUNTIME140_1.dll，而安装器只装 WebView2 —— 干净 Win10（没装
+# VC++ 2015-2022 x64 运行库）上宿主 LoadLibrary 会直接失败，表现为
+# "扫描不到插件"，安装器却一切正常。
+#
+# 改成静态 CRT（/MT，Debug 用 /MTd）后发布包不依赖任何 VC++ 运行库，
+# 安装器也不用手动捆绑 vc_redist.x64.exe。
+#
+# ⚠️ 必须在 add_subdirectory(../JUCE) / juce_add_plugin() **之前**设置：
+#    CMAKE_MSVC_RUNTIME_LIBRARY 只对之后创建的 target 生效，而 VST3/Standalone
+#    的 wrapper 是 juce_add_plugin 内部新建的 target（不继承 TOIRE76 的
+#    target 属性），两边 CRT 必须一致，否则会出现 LNK4098 默认库冲突。
+# ─────────────────────────────────────────────────────────────
+if(MSVC)
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+    message(STATUS "TOiRE-76: static MSVC runtime (/MT) — no VC++ redist required")
+endif()
+
 
 add_subdirectory(../JUCE ${CMAKE_BINARY_DIR}/juce)
 

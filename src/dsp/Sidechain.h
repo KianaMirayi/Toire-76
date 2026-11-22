@@ -375,6 +375,17 @@ public:
      * "信号到底还在不在"。
      */
     double process(double sampleAfterGR, double inputLevel = 0.0) {
+        // ── NaN/Inf 兜底（入口）─────────────────────────────────────────
+        // 上游一个坏样本（Inf / NaN：前级插件崩溃恢复、未初始化缓冲、参数跳变）
+        // 会顺着 rectify() 灌进 vcFast_/vcSlow_，再经 control() 进 uPrev_。
+        // 这些量一旦非有限就再也回不来：std::clamp 与所有比较对 NaN 恒为 false，
+        // 指数衰减也拉不动 NaN → 插件**永久**输出 NaN 或静音，只能重载。
+        // 所以把非有限输入当成"没有信号"：清掉全部状态、输出 0，下一个样本重新开始。
+        if (! std::isfinite(sampleAfterGR) || ! std::isfinite(inputLevel)) {
+            reset();
+            return 0.0;
+        }
+
         const double r = rectify(sampleAfterGR);
         const double dt = 1.0 / sr_;
         const auto coef = [dt](double tau) {
@@ -460,6 +471,14 @@ public:
                 atkT_ += dt;
             }
         }
+
+        // ── NaN/Inf 兜底（出口）─────────────────────────────────────────
+        // 上面若因极端数值算出了 Inf/NaN（例如整流值爆掉），这里同样复位，
+        // 绝不让非有限状态活过这一样本。
+        if (! std::isfinite(vc_)) {
+            reset();
+            return 0.0;
+        }
         return vc_;
     }
 
@@ -498,6 +517,13 @@ public:
      *   窗口长度 kAtkWindowSec（atkT_ 在 process() 里维护）。
      */
     double control(double vc) {
+        // NaN/Inf 兜底：非有限控制量不许往下游走（uPrev_ 是非有限值时同理）。
+        // v0.1.0 的问题：`vc <= 1e-12` 对 NaN 恒为 false，log10 继续传播 NaN，
+        // 之后 uPrev_ 永远 NaN → 输出静音。
+        if (! std::isfinite(vc)) {
+            vc_ = vcFast_ = vcSlow_ = uPrev_ = 0.0;
+            return 0.0;
+        }
         if (vc <= 1e-12) return 0.0;
         const double dBabove = 20.0 * std::log10(1.0 + vc / std::max(bias_, 1e-12));
         const double grTarget = (ratioTarget_ - 1.0) * dBabove;
@@ -512,6 +538,11 @@ public:
             uPrev_ += (uTarget - uPrev_) * (1.0 - std::exp(-dt / std::max(tauAtk_, 1e-9)));
         } else {
             uPrev_ = uTarget;   // 稳态：与 HEAD 完全一致（无平滑），静态/释放标定不变
+        }
+
+        if (! std::isfinite(uPrev_)) {   // 兜底：状态算坏了就整组归零，别传给 FET
+            vc_ = vcFast_ = vcSlow_ = uPrev_ = 0.0;
+            return 0.0;
         }
         return uPrev_;
     }

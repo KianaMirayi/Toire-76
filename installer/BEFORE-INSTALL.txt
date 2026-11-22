@@ -25,7 +25,9 @@ TOiRE-76 — Windows VST3 安装说明
 ------
   · 64 位 Windows 10 1809 及以上 / Windows 11
   · 支持 VST3 的宿主（REAPER / Cubase / Studio One / Studio Pro 等）
-  · 采样率任意；插件会自动做内部 2–4 倍过采样，总延迟固定 86 samples @48 kHz
+  · 采样率任意；插件会自动做内部 2–4 倍过采样
+    上报/补偿延迟：86 samples @44.1–48 kHz，118 @96 kHz，151 @192 kHz
+  · 不需要单独安装 VC++ 运行库（C 运行库已静态链接进插件）
 
 问题反馈
 --------

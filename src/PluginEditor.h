@@ -62,6 +62,10 @@ private:
     static juce::File presetDir();
     void savePresetAs (const juce::String& suggestedName);
 
+    /** 读一个参数的**去归一化**值（input/output/attack/release 是 0..1，
+        ratio/meter 是档位 index）。只在消息线程同步调用 —— 不要放进异步回调。 */
+    double readDenorm (const char* paramID) const;
+
     TOIRE76AudioProcessor& processor;
 
     // ── 参数双向绑定（名字必须和 WebUI/app.js 的 getSliderState 一致）──

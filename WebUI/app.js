@@ -982,6 +982,9 @@ function needleTheta(t) {
     { name: "Mix Bus",    input: 0.400, output: 0.820, attack: 0.500, release: 0.600, ratio: 0, meter: 0 }
   ];
   var presetIndex = 0;
+  /** 当前预设的**稳定标识**（"f:<工厂下标>" / "u:<名字>"）。
+      不用数组下标跟踪：用户预设列表每保存/删除一个文件都会重新 sort()，下标会漂。 */
+  var currentPresetKey = "";
 
   /* ── 用户预设（由 C++ 从插件目录读取，事件推送到前端）── */
   var FILE_PRESETS = [];
@@ -1000,11 +1003,34 @@ function needleTheta(t) {
     window.__JUCE__.backend.emitEvent("t76PresetCmd", { action: action, name: name || "" });
   }
 
+  /** 预设条目的稳定 key：用户预设按**名字**，工厂预设按下标（工厂表是硬编码的，不会漂） */
+  function presetKey(item) {
+    if (item.kind === "user")
+      return "u:" + (item.p.name || ("Preset " + (item.idx + 1)));
+    return "f:" + item.idx;
+  }
+
+  function keyToPresetIndex(key) {
+    if (!key) return -1;
+    var list = allPresets();
+    for (var i = 0; i < list.length; ++i)
+      if (presetKey(list[i]) === key) return i;
+    return -1;
+  }
+
+  function hasOptionValue(sel, v) {
+    for (var i = 0; i < sel.options.length; ++i)
+      if (sel.options[i].value === v) return true;
+    return false;
+  }
+
   function applyPreset(i) {
     var list = allPresets();
+    if (!list.length) return;
     i = Math.max(0, Math.min(list.length - 1, i));
     presetIndex = i;
-    var pv = list[i].p;
+    var item = list[i];
+    var pv = item.p;
     state.input = pv.input; state.output = pv.output;
     state.attack = pv.attack; state.release = pv.release;
     state.ratio = pv.ratio; state.meter = pv.meter;
@@ -1014,51 +1040,67 @@ function needleTheta(t) {
     pushSlider("release", pv.release);
     pushChoice("ratio", pv.ratio);
     pushChoice("meter", pv.meter);
+    // 按 key（名字/下标）记当前预设，并同步下拉框
+    currentPresetKey = presetKey(item);
     var sel = document.getElementById("preset-select");
     if (sel) {
-      var item = list[i];
-      var v = item.kind === "user" ? String(item.idx) : String(1000 + item.idx);
-      sel.value = v;
-      presetSelectValue = v;
+      sel.value = currentPresetKey;
+      presetSelectValue = currentPresetKey;
     }
     render();
+  }
+
+  /** 下拉框的值 → 应用对应预设（user 预设按名字找，列表重排也不会指错） */
+  function applySelectValue(v) {
+    if (!v || v === "-1") return;
+    var idx = keyToPresetIndex(v);
+    if (idx >= 0) applyPreset(idx);
+  }
+
+  /** ◀ / ▶：按当前预设的 key 定位，再前后走一步 */
+  function stepPreset(d) {
+    var i = keyToPresetIndex(currentPresetKey);
+    applyPreset((i < 0 ? 0 : i) + d);
   }
 
   function rebuildPresetList() {
     var sel = document.getElementById("preset-select");
     if (!sel) return;
-    var prev = sel.value;
+    var prev = presetSelectValue;
     sel.innerHTML = "";
 
     var g2 = document.createElement("optgroup");
     g2.label = "用户预设";
-    if (!FILE_PRESETS.length) {
-      var e = document.createElement("option");
-      e.value = "-1"; e.textContent = "（无用户预设）"; e.disabled = true;
-      g2.appendChild(e);
-    } else {
-      FILE_PRESETS.forEach(function (pr, i) {
-        var o = document.createElement("option");
-        o.value = i; o.textContent = pr.name || ("Preset " + (i + 1));
-        g2.appendChild(o);
-      });
-    }
+    // 占位项：列表到达后**不自动选中、也不 apply** 第一个用户预设。
+    // v0.1.0 的 bug 是这里把 want 强制成 "0" → 下拉框显示第一个用户预设，
+    // 但参数从没被应用过（显示 A、实际音色 B），而且该项已选中，再点它不触发 change。
+    var ph = document.createElement("option");
+    ph.value = "-1";
+    ph.textContent = FILE_PRESETS.length ? "（选择预设）" : "（无用户预设）";
+    if (!FILE_PRESETS.length) ph.disabled = true;
+    g2.appendChild(ph);
+
+    FILE_PRESETS.forEach(function (pr, i) {
+      var o = document.createElement("option");
+      var nm = pr.name || ("Preset " + (i + 1));
+      o.value = "u:" + nm;          // ← value 用**名字**，不是数组下标
+      o.textContent = nm;
+      g2.appendChild(o);
+    });
     sel.appendChild(g2);
 
     var g1 = document.createElement("optgroup");
     g1.label = "工厂预设";
     PRESETS.forEach(function (pr, i) {
       var o = document.createElement("option");
-      o.value = 1000 + i; o.textContent = pr.name;
+      o.value = "f:" + i; o.textContent = pr.name;
       g1.appendChild(o);
     });
     sel.appendChild(g1);
 
-    // 默认选中：有用户预设选第一个，否则选占位项
-    var want = FILE_PRESETS.length ? "0" : "-1";
-    if (prev && prev !== "-2" && prev !== "-1" && sel.querySelector('option[value="' + prev + '"]')) want = prev;
-    sel.value = want;
-    presetSelectValue = want;
+    // 刷新后按**名字**恢复选中项；找不到（被删/改名）就退回占位项 "-1"
+    sel.value = hasOptionValue(sel, prev) ? prev : "-1";
+    presetSelectValue = sel.value;
   }
 
   function buildPresetBar() {
@@ -1067,11 +1109,18 @@ function needleTheta(t) {
     rebuildPresetList();
 
     sel.addEventListener("change", function () {
-      var v = parseInt(sel.value, 10);
-      if (isNaN(v) || v < 0) { sel.value = presetSelectValue || "-1"; return; }
+      if (sel.value === "-1") { presetSelectValue = "-1"; return; }
       presetSelectValue = sel.value;
-      if (v >= 1000) applyPreset(FILE_PRESETS.length + (v - 1000));
-      else applyPreset(v);
+      applySelectValue(sel.value);
+    });
+
+    // 同一个选项再点一次不会触发 change（value 没变）→ 用 click 兜底：
+    // pointerdown 记下"点之前的值"，click 时值没变就手动再应用一次。
+    sel.addEventListener("pointerdown", function () { sel.dataset.prev = sel.value; });
+    sel.addEventListener("click", function () {
+      var v = sel.value;
+      if (!v || v === "-1") return;
+      if (v === sel.dataset.prev) applySelectValue(v);
     });
 
     var svBtn = document.getElementById("preset-save");
@@ -1079,8 +1128,8 @@ function needleTheta(t) {
 
     var pv = document.getElementById("preset-prev");
     var nx = document.getElementById("preset-next");
-    if (pv) pv.addEventListener("click", function () { applyPreset(presetIndex - 1); });
-    if (nx) nx.addEventListener("click", function () { applyPreset(presetIndex + 1); });
+    if (pv) pv.addEventListener("click", function () { stepPreset(-1); });
+    if (nx) nx.addEventListener("click", function () { stepPreset(1); });
 
     sendPresetCmd("refresh");
   }

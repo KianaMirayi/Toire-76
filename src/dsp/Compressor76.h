@@ -64,11 +64,11 @@ public:
 
     /** 单样本处理（单声道，基带） */
     double processSample(double x) {
-        if (!power_) return x;
+        if (!power_) return finiteClamp(x);
 
         if (bypassComp_) {
             vcPrev_ = 0.0;
-            return softClip(x * inputGain_ * fet_.quiescentGain() * preampGain_ * outputGain_);   // OFF 档：无 GR，但保留 make-up（听感与压缩时接近）
+            return finiteClamp(softClip(x * inputGain_ * fet_.quiescentGain() * preampGain_ * outputGain_));   // OFF 档：无 GR，但保留 make-up（听感与压缩时接近）
         }
 
         const double xin = x * inputGain_;
@@ -78,18 +78,22 @@ public:
         const double vc = side_.process(yGr, std::abs(xin));
         vcPrev_ = side_.control(vc);
 
-        return softClip(yGr * preampGain_ * outputGain_);
+        return finiteClamp(softClip(yGr * preampGain_ * outputGain_));
     }
 
     /** 立体声：侧链取 L/R 较大者，两声道共用同一个控制电压（避免声像漂移） */
     void processStereo(double& l, double& r) {
-        if (!power_) return;
+        if (!power_) {
+            l = finiteClamp(l);
+            r = finiteClamp(r);
+            return;
+        }
 
         if (bypassComp_) {
             vcPrev_ = 0.0;
             const double k = inputGain_ * fet_.quiescentGain() * preampGain_ * outputGain_;
-            l = softClip(l * k);
-            r = softClip(r * k);
+            l = finiteClamp(softClip(l * k));
+            r = finiteClamp(softClip(r * k));
             return;
         }
 
@@ -105,8 +109,8 @@ public:
         vcPrev_ = side_.control(vc);
 
         const double make = preampGain_ * outputGain_;
-        l = softClip(yl * make);
-        r = softClip(yr * make);
+        l = finiteClamp(softClip(yl * make));
+        r = finiteClamp(softClip(yr * make));
     }
 
     // ---- 观测 ----
@@ -135,6 +139,15 @@ private:
         if (a <= knee) return x;
         const double shaped = knee + (1.0 - std::exp(-(a - knee))) * 0.9;
         return std::copysign(shaped, x);
+    }
+
+    /** 输出兜底（等价于 juce::jlimit(-4, 4, y)）。本头文件保持不依赖 JUCE（dsp_test
+        是纯 C++17），所以用 std::clamp。±4 = +12 dBFS，远高于软限幅 2.5 的上限：
+        正常信号永远碰不到，只有数值爆掉（Inf/NaN）时才生效 —— 宁可一瞬静音，
+        也不要把 NaN 交给宿主（传下去会毒化后面整条链路和 DAC）。 */
+    static double finiteClamp(double y) {
+        if (! std::isfinite(y)) return 0.0;
+        return std::clamp(y, -4.0, 4.0);
     }
 
     double sr_ = 48000.0;
