@@ -319,7 +319,7 @@
     gr: 0.0, level: 0.0, power: true, bypass: false
   };
 
-  var DEBUG = true;   // 临时：实时显示 INPUT/OUTPUT 增益，核对完删掉
+  var DEBUG = (window.location.search.indexOf("debug=1") >= 0) || !HAS_BACKEND;
 
   var cppStatus = HAS_BACKEND ? "wait" : "mock";
 
@@ -906,9 +906,9 @@ function needleTheta(t) {
        atkMs : 电平表攻击时间（毫秒）
        relMs : 电平表释放时间（毫秒）
        grRel : GR 档额外回落平滑（毫秒，0=不加，交给弹簧本身）
-     默认值：ω=13.1026 rad/s、ζ=0.80 → 300 ms 到 99%、过冲 1.52%（VU 规范）
+     默认值来自手动调参定稿：ω=19.3 rad/s、ζ=0.50、释放 540 ms、GR 回落 50 ms
      ⚠️ 内部子步必须 ≥120 Hz，否则过冲会被离散化吃掉（我们是 240 Hz）*/
-  var NEEDLE_CFG = { omega: 13.1026, zeta: 0.80, atkMs: 5, relMs: 300, grRelMs: 0 };
+  var NEEDLE_CFG = { omega: 19.3, zeta: 0.50, atkMs: 5, relMs: 540, grRelMs: 50 };
   try {
     var _saved = JSON.parse(window.localStorage.getItem("t76needle") || "{}");
     for (var _k in NEEDLE_CFG) if (typeof _saved[_k] === "number" && isFinite(_saved[_k])) NEEDLE_CFG[_k] = _saved[_k];
@@ -1006,7 +1006,6 @@ function needleTheta(t) {
 
   /* 表针参数调试面板（仅 DEBUG）：ω / ζ / 释放时间，实时生效并记忆 */
   function buildTuner() {
-    if (!DEBUG) return;
     if (document.getElementById("tuner")) return;
     var d = el("div", { id: "tuner" });
     var rows = [
