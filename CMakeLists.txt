@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(TOIRE76 VERSION 0.1.0 LANGUAGES CXX)
+project(TOIRE76 VERSION 0.1.1 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -51,7 +51,7 @@ juce_add_plugin(TOIRE76
     PLUGIN_CODE T761
     FORMATS VST3 Standalone
     PRODUCT_NAME "TOiRE-76"
-    VERSION 0.1.0
+    VERSION 0.1.1
     IS_SYNTH FALSE
     NEEDS_MIDI_INPUT FALSE
     NEEDS_MIDI_OUTPUT FALSE
@@ -183,7 +183,7 @@ if(TOIRE76_NATIVE_DEMO)
     juce_add_gui_app(TOIRE76_NativeDemo
         PRODUCT_NAME "TOiRE-76 Native Demo"
         COMPANY_NAME "TOREI"
-        VERSION 0.1.0)
+        VERSION 0.1.1)
 
     # ⚠️ JUCE 8：必须在 target_sources 之前生成 JuceHeader.h
     juce_generate_juce_header(TOIRE76_NativeDemo)

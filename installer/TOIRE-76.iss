@@ -19,7 +19,7 @@
 ; ============================================================================
 
 #define AppName      "TOiRE-76"
-#define AppVersion   "0.1.0"
+#define AppVersion   "0.1.1"
 #define AppPublisher "Kiana Mirayi"
 #define BundleName   "TOiRE-76.vst3"
 
