@@ -893,8 +893,10 @@ function needleTheta(t) {
        zeta  : 阻尼比 —— 越小过冲越多、越"晃"
        atkMs : 电平表攻击时间（毫秒）
        relMs : 电平表释放时间（毫秒）
-       grRel : GR 档指针回落时间（毫秒，0=不额外平滑） */
-  var NEEDLE_CFG = { omega: 9.0, zeta: 0.72, atkMs: 5, relMs: 300, grRelMs: 220 };
+       grRel : GR 档额外回落平滑（毫秒，0=不加，交给弹簧本身）
+     默认值：ω=13.1026 rad/s、ζ=0.80 → 300 ms 到 99%、过冲 1.52%（VU 规范）
+     ⚠️ 内部子步必须 ≥120 Hz，否则过冲会被离散化吃掉（我们是 240 Hz）*/
+  var NEEDLE_CFG = { omega: 13.1026, zeta: 0.80, atkMs: 5, relMs: 300, grRelMs: 0 };
   try {
     var _saved = JSON.parse(window.localStorage.getItem("t76needle") || "{}");
     for (var _k in NEEDLE_CFG) if (typeof _saved[_k] === "number" && isFinite(_saved[_k])) NEEDLE_CFG[_k] = _saved[_k];
@@ -994,7 +996,7 @@ function needleTheta(t) {
     if (document.getElementById("tuner")) return;
     var d = el("div", { id: "tuner" });
     var rows = [
-      ["omega", "上升 ω", 2, 30, 0.5, "rad/s"],
+      ["omega", "上升 ω", 2, 40, 0.1, "rad/s"],
       ["zeta",  "阻尼 ζ", 0.15, 1.5, 0.01, ""],
       ["relMs", "释放(ms)", 20, 2000, 10, "ms"]
     ];
@@ -1144,11 +1146,15 @@ function needleTheta(t) {
           state.smoothOutDb += (rawOut - state.smoothOutDb) * (rawOut > state.smoothOutDb ? aAtk : aRel);
           state.outDb = state.smoothOutDb;
           state.inDb  = parseFloat(payload[1]);
-          // GR 档指针回落（可调）：上升立即、回落按 grRelMs
-          var aGrRel = 1 - Math.exp(-dts / Math.max(0.02, NEEDLE_CFG.grRelMs / 1000));
-          if (typeof state.smoothGr !== "number" || !isFinite(state.smoothGr)) state.smoothGr = rawGr;
-          state.smoothGr += (rawGr - state.smoothGr) * (rawGr > state.smoothGr ? 1 : aGrRel);
-          state.gr = state.smoothGr;
+          // GR 直接喂给表针弹簧（UAD 的平滑在算法侧，GUI 零平滑）
+          if (NEEDLE_CFG.grRelMs > 20) {
+            var aGrRel = 1 - Math.exp(-dts / (NEEDLE_CFG.grRelMs / 1000));
+            if (typeof state.smoothGr !== "number" || !isFinite(state.smoothGr)) state.smoothGr = rawGr;
+            state.smoothGr += (rawGr - state.smoothGr) * (rawGr > state.smoothGr ? 1 : aGrRel);
+            state.gr = state.smoothGr;
+          } else {
+            state.gr = rawGr;
+          }
         } else if (payload && payload.length) {
           state.gr = parseFloat(payload[0]) || 0;
         }
