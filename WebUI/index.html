@@ -11,6 +11,12 @@
 <div id="errors"></div>
 
 <div id="stage">
+  <div id="presetbar">
+    <button id="preset-prev" title="上一个预设">&#9664;</button>
+    <select id="preset-select"></select>
+    <button id="preset-next" title="下一个预设">&#9654;</button>
+    <span id="preset-badge">TOIRE-76</span>
+  </div>
   <div id="panel">
     <!-- z0 : 静态面板（拉丝 / 四角孔 / 螺丝 / PATCH / 凹槽 / 表框 / 纸面） -->
     <img id="panel-base" src="assets/panel_base.png" alt="panel">
@@ -20,6 +26,7 @@
 
     <!-- z20 : VU 指针（裁剪窗口里旋转） -->
     <div id="vu-window"></div>
+    <div id="vu-dim"></div>
 
     <!-- z30 : 表头玻璃反光 -->
     <img id="meter-glass" src="assets/meter_glass.png" alt="glass">

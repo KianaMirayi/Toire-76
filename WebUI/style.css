@@ -22,7 +22,37 @@ body {
   width: 100vw; height: 100vh;
 }
 
-#stage { transform: scale(var(--zoom, 1)); transform-origin: center center; }
+#stage { transform: scale(var(--zoom, 1)); transform-origin: center center;
+  display: flex; flex-direction: column; align-items: stretch; width: 950px; }
+
+/* ── 顶部预设条（参照参考插件的预设栏）── */
+#presetbar {
+  height: 30px; width: 950px; flex: 0 0 30px;
+  display: flex; align-items: center; gap: 6px; padding: 0 8px;
+  background: linear-gradient(#1b1b1e, #121214);
+  border-bottom: 1px solid #2c2c31;
+  font: 11px/1 ui-monospace, Consolas, monospace; color: #cfcfd2;
+  user-select: none;
+}
+#presetbar button {
+  width: 22px; height: 18px; border: 1px solid #3a3a40; border-radius: 2px;
+  background: #1e1e22; color: #cfcfd2; font-size: 9px; cursor: pointer; padding: 0;
+}
+#presetbar button:hover { background: #2a2a30; }
+#presetbar select {
+  height: 18px; min-width: 160px; padding: 0 4px;
+  background: #141416; color: #e6e6ea; border: 1px solid #3a3a40; border-radius: 2px;
+  font: 11px/1 ui-monospace, Consolas, monospace;
+}
+#preset-badge { margin-left: auto; color: #6b6b72; letter-spacing: .08em; }
+
+/* METER = OFF：表盘整体变暗 */
+#vu-dim {
+  position: absolute; left: 640px; top: 36px; width: 148px; height: 72px;
+  background: rgba(0, 0, 0, .58); border-radius: 3px;
+  pointer-events: none; z-index: 40; display: none;
+}
+#vu-dim.on { display: block; }
 
 #panel {
   position: relative;

@@ -970,6 +970,52 @@ function needleTheta(t) {
   }
 
   /* 紧凑 HUD：实时显示 INPUT/OUTPUT 与 GR（调试用，确认后可删） */
+
+  /* ── 工厂预设（与 C++ 的 kPresets 保持一致的值）── */
+  var PRESETS = [
+    { name: "Init",       input: 0.200, output: 0.6259, attack: 0.500, release: 0.666, ratio: 0, meter: 0 },
+    { name: "Drum Room",  input: 0.620, output: 0.500,  attack: 0.900, release: 0.300, ratio: 4, meter: 0 },
+    { name: "Drum Punch", input: 0.550, output: 0.550,  attack: 0.750, release: 0.450, ratio: 1, meter: 0 },
+    { name: "Vocal",      input: 0.450, output: 0.600,  attack: 0.550, release: 0.500, ratio: 1, meter: 0 },
+    { name: "Bass",       input: 0.500, output: 0.580,  attack: 0.400, release: 0.350, ratio: 2, meter: 0 },
+    { name: "Mix Bus",    input: 0.350, output: 0.650,  attack: 0.500, release: 0.600, ratio: 0, meter: 0 }
+  ];
+  var presetIndex = 0;
+
+  function applyPreset(i) {
+    presetIndex = (i + PRESETS.length) % PRESETS.length;
+    var pv = PRESETS[presetIndex];
+    state.input = pv.input; state.output = pv.output;
+    state.attack = pv.attack; state.release = pv.release;
+    state.ratio = pv.ratio; state.meter = pv.meter;
+    pushSlider("input", pv.input);
+    pushSlider("output", pv.output);
+    pushSlider("attack", pv.attack);
+    pushSlider("release", pv.release);
+    pushChoice("ratio", pv.ratio);
+    pushChoice("meter", pv.meter);
+    var sel = document.getElementById("preset-select");
+    if (sel) sel.selectedIndex = presetIndex;
+    render();
+  }
+
+  function buildPresetBar() {
+    var sel = document.getElementById("preset-select");
+    if (!sel) return;
+    sel.innerHTML = "";
+    PRESETS.forEach(function (pr, i) {
+      var o = document.createElement("option");
+      o.value = i; o.textContent = pr.name;
+      sel.appendChild(o);
+    });
+    sel.selectedIndex = presetIndex;
+    sel.addEventListener("change", function () { applyPreset(parseInt(sel.value, 10) || 0); });
+    var pv = document.getElementById("preset-prev");
+    var nx = document.getElementById("preset-next");
+    if (pv) pv.addEventListener("click", function () { applyPreset(presetIndex - 1); });
+    if (nx) nx.addEventListener("click", function () { applyPreset(presetIndex + 1); });
+  }
+
   function renderHud() {
     if (!DEBUG) return;
     var hud = document.getElementById("hud");
@@ -1079,11 +1125,11 @@ function needleTheta(t) {
       mbn[mi].style.backgroundImage = "url(" + A + "meter_btn_" + METER_KEYS[mi] + (downM ? "_down.png" : "_up.png") + ")";
     }
 
-    // METER = OFF → VU 表变暗
-    var vuw = document.getElementById("vu-window");
-    if (vuw) {
-      if (state.meter === 3) vuw.classList.add("dim");
-      else vuw.classList.remove("dim");
+    // METER = OFF → 表盘整体变暗（遮罩盖住表框+指针）
+    var dim = document.getElementById("vu-dim");
+    if (dim) {
+      if (state.meter === 3) dim.classList.add("on");
+      else dim.classList.remove("on");
     }
 
     // 表针
@@ -1199,7 +1245,7 @@ function needleTheta(t) {
 
   /* ---------------- 12. 等比缩放到窗口 ---------------- */
   function fit() {
-    var z = Math.min(window.innerWidth / 950, window.innerHeight / 175);
+    var z = Math.min(window.innerWidth / 950, window.innerHeight / 205);
     if (!(z > 0) || !isFinite(z)) z = 1;
     document.documentElement.style.setProperty("--zoom", z);
   }
@@ -1221,7 +1267,8 @@ function boot() {
     buildKnobs();
     buildButtons();
     buildNeedle();
-    buildToggles();
+    buildPresetBar();
+  buildToggles();
   buildTuner();
     bindParams();
     render();

@@ -67,8 +67,8 @@ TOIRE76AudioProcessorEditor::TOIRE76AudioProcessorEditor (TOIRE76AudioProcessor&
 
     // 参考画布 950x175（= renders/components.json canvas），可等比放大到 1900x350
     setResizable (true, true);
-    setResizeLimits (950, 175, 1900, 350);
-    setSize (950, 175);
+    setResizeLimits (950, 205, 1900, 410);
+    setSize (950, 205);
 
     // ── 参数双向绑定：DAW 自动化 ←→ 网页旋钮 ─────────────────
     // 连续参数（0..1）
@@ -249,7 +249,7 @@ TOIRE76AudioProcessorEditor::TOIRE76AudioProcessorEditor (TOIRE76AudioProcessor&
     : AudioProcessorEditor (&p), processor (p)
 {
     setOpaque (true);
-    setSize (950, 175);
+    setSize (950, 205);
 }
 
 void TOIRE76AudioProcessorEditor::paint (juce::Graphics& g)
