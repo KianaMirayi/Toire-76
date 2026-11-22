@@ -1079,6 +1079,13 @@ function needleTheta(t) {
       mbn[mi].style.backgroundImage = "url(" + A + "meter_btn_" + METER_KEYS[mi] + (downM ? "_down.png" : "_up.png") + ")";
     }
 
+    // METER = OFF → VU 表变暗
+    var vuw = document.getElementById("vu-window");
+    if (vuw) {
+      if (state.meter === 3) vuw.classList.add("dim");
+      else vuw.classList.remove("dim");
+    }
+
     // 表针
     renderMeter();
 

@@ -54,6 +54,55 @@ juce::AudioProcessorValueTreeState::ParameterLayout TOIRE76AudioProcessor::creat
 }
 
 //==============================================================================
+
+//==============================================================================
+namespace
+{
+    struct Preset
+    {
+        const char* name;
+        float input, output, attack, release;
+        int   ratio;      // 0=4:1 1=8:1 2=12:1 3=20:1 4=ALL
+        int   meter;      // 0=GR 1=+8 2=+4 3=OFF
+    };
+
+    // 工厂预设（参照 1176 的常见用法）
+    const Preset kPresets[TOIRE76AudioProcessor::kNumPresets] = {
+        { "Init",        0.200f, 0.6259f, 0.500f, 0.666f, 0, 0 },
+        { "Drum Room",   0.620f, 0.500f,  0.900f, 0.300f, 4, 0 },
+        { "Drum Punch",  0.550f, 0.550f,  0.750f, 0.450f, 1, 0 },
+        { "Vocal",       0.450f, 0.600f,  0.550f, 0.500f, 1, 0 },
+        { "Bass",        0.500f, 0.580f,  0.400f, 0.350f, 2, 0 },
+        { "Mix Bus",     0.350f, 0.650f,  0.500f, 0.600f, 0, 0 }
+    };
+}
+
+void TOIRE76AudioProcessor::setCurrentProgram (int index)
+{
+    index = juce::jlimit (0, kNumPresets - 1, index);
+    currentProgram = index;
+    const auto& p = kPresets[index];
+
+    auto setNorm = [this] (const char* id, float v)
+    {
+        if (auto* param = apvts.getParameter (id))
+            param->setValueNotifyingHost (param->convertTo0to1 (v));
+    };
+
+    setNorm ("input",   p.input);
+    setNorm ("output",  p.output);
+    setNorm ("attack",  p.attack);
+    setNorm ("release", p.release);
+    setNorm ("ratio",   (float) p.ratio);
+    setNorm ("meter",   (float) p.meter);
+}
+
+const juce::String TOIRE76AudioProcessor::getProgramName (int index)
+{
+    index = juce::jlimit (0, kNumPresets - 1, index);
+    return kPresets[index].name;
+}
+
 TOIRE76AudioProcessor::TOIRE76AudioProcessor()
     : AudioProcessor (BusesProperties()
                           .withInput  ("Input",  juce::AudioChannelSet::stereo(), true)
@@ -65,6 +114,7 @@ TOIRE76AudioProcessor::TOIRE76AudioProcessor()
     attackParam  = apvts.getRawParameterValue ("attack");
     releaseParam = apvts.getRawParameterValue ("release");
     ratioParam   = apvts.getRawParameterValue ("ratio");
+    meterParam   = apvts.getRawParameterValue ("meter");
     powerParam   = apvts.getRawParameterValue ("power");
     bypassParam  = apvts.getRawParameterValue ("bypass");
     // 默认延迟：48 kHz 下 86 samples = 1.792 ms。
@@ -231,6 +281,8 @@ void TOIRE76AudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     compressor.setReleaseNorm(releaseParam ? releaseParam ->load() : 0.666f);
     compressor.setRatioIndex (ratioParam ? int (ratioParam->load() + 0.5f) : 0);
     compressor.setPower (true);
+    // METER = OFF（第 4 档）→ 压缩旁通（与参考插件一致：打到 OFF 不再压缩）
+    compressor.setCompressionBypass (meterParam != nullptr && int (meterParam->load() + 0.5f) == 3);
 
     // ── 处理（先升频，在内部 FSR 跑模型，再降频）────────────────
     if (oversampler != nullptr)

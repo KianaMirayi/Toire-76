@@ -58,9 +58,18 @@ public:
     }
     void setPower(bool on) { power_ = on; }
 
+    /** 压缩旁通（METER 打到 OFF 时用）：音频照过，但增益固定为静态点位，不做 GR */
+    void setCompressionBypass(bool b) { bypassComp_ = b; }
+    bool compressionBypassed() const { return bypassComp_; }
+
     /** 单样本处理（单声道，基带） */
     double processSample(double x) {
         if (!power_) return x;
+
+        if (bypassComp_) {
+            vcPrev_ = 0.0;
+            return softClip(x * inputGain_ * fet_.quiescentGain() * preampGain_ * outputGain_);   // OFF 档：无 GR，但保留 make-up（听感与压缩时接近）
+        }
 
         const double xin = x * inputGain_;
         const double g = fet_.gain(vcPrev_);
@@ -75,6 +84,14 @@ public:
     /** 立体声：侧链取 L/R 较大者，两声道共用同一个控制电压（避免声像漂移） */
     void processStereo(double& l, double& r) {
         if (!power_) return;
+
+        if (bypassComp_) {
+            vcPrev_ = 0.0;
+            const double k = inputGain_ * fet_.quiescentGain() * preampGain_ * outputGain_;
+            l = softClip(l * k);
+            r = softClip(r * k);
+            return;
+        }
 
         const double xl = l * inputGain_;
         const double xr = r * inputGain_;
@@ -128,6 +145,7 @@ private:
     int ratio_ = 0;
     bool power_ = true;
     double vcPrev_ = 0.0;
+    bool   bypassComp_ = false;
 
     FetModel fet_;
     Sidechain side_;

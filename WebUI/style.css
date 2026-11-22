@@ -166,3 +166,10 @@ body {
 #tuner .trow span:first-child { width: 54px; }
 #tuner input[type=range] { flex: 1; height: 10px; }
 #tuner .tval { width: 52px; text-align: right; color: #ffd27e; }
+
+/* METER = OFF：VU 表变暗（与参考插件一致） */
+#vu-window { transition: filter .18s ease, opacity .18s ease; }
+#vu-window.dim {
+  filter: brightness(0.42) saturate(0.35) contrast(0.92);
+  opacity: 0.75;
+}

@@ -50,11 +50,13 @@ public:
     double getTailLengthSeconds() const override { return 0.0; }
 
     //==============================================================================
-    int getNumPrograms() override { return 1; }
-    int getCurrentProgram() override { return 0; }
-    void setCurrentProgram (int) override {}
-    const juce::String getProgramName (int) override { return "Default"; }
+    int getNumPrograms() override { return kNumPresets; }
+    int getCurrentProgram() override { return currentProgram; }
+    void setCurrentProgram (int index) override;
+    const juce::String getProgramName (int index) override;
     void changeProgramName (int, const juce::String&) override {}
+
+    static constexpr int kNumPresets = 6;
 
     //==============================================================================
     void getStateInformation (juce::MemoryBlock& destData) override;
@@ -75,6 +77,9 @@ private:
     std::atomic<float>* attackParam  = nullptr;
     std::atomic<float>* releaseParam = nullptr;
     std::atomic<float>* ratioParam   = nullptr;
+    std::atomic<float>* meterParam   = nullptr;
+
+    int currentProgram = 0;
     std::atomic<float>* powerParam   = nullptr;
     std::atomic<float>* bypassParam  = nullptr;
 
