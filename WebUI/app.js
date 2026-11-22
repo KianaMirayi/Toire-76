@@ -949,6 +949,26 @@ function needleTheta(t) {
       "GR  " + state.gr.toFixed(1) + " dB";
   }
 
+  /* VU 表针：GR 档读压缩量（0 在右、-20 在左），+8/+4 档读输出电平，OFF 停最左 */
+  function renderMeter() {
+    var dbNow = -20, mode = state.meter;
+    if (!state.power) {
+      dbNow = -20;
+    } else if (mode === 0) {
+      // GR：压缩量 dB（0..20）→ 表针 0..-20
+      dbNow = -(state.gr || 0);
+    } else if (mode === 1 || mode === 2) {
+      // +8/+4：输出峰值电平（dBFS）直接读；本插件输出满度 ≈ 0 dBFS
+      var outDb = (typeof state.outDb === "number" && isFinite(state.outDb)) ? state.outDb : -100;
+      dbNow = outDb + (mode === 1 ? 8 : 4);
+    }
+    if (dbNow < -20) dbNow = -20;
+    if (dbNow > 3) dbNow = 3;
+    var t = (vuThetaForDb(dbNow) + 49.13) / 100.29;
+    if (t < 0) t = 0; if (t > 1) t = 1;
+    needleSetTarget(parseFloat(needleTheta(t).toFixed(2)), mode);
+  }
+
   function render() {
     renderPointers();
     // 旋钮指示针
@@ -983,20 +1003,8 @@ function needleTheta(t) {
       mbn[mi].style.backgroundImage = "url(" + A + "meter_btn_" + METER_KEYS[mi] + (downM ? "_down.png" : "_up.png") + ")";
     }
 
-    // 指针
-    // 指针位置按 VU 标准：GR 停 0、+4/+8 读电平、OFF 停最左
-    var dbNow, mode = state.meter;
-    if (!state.power) { dbNow = -20; }
-    else if (mode === 0) { dbNow = 0 - (state.gr || 0) * 20; }              // GR：0 → -20
-    else if (mode === 1) { dbNow = (-20 + (state.level || 0) * 23) - 8; } // +8
-    else if (mode === 2) { dbNow = (-20 + (state.level || 0) * 23) - 4; } // +4
-    else { dbNow = -20; }                                                    // OFF
-    if (dbNow < -20) dbNow = -20;
-    if (dbNow > 3) dbNow = 3;
-    var t = (vuThetaForDb(dbNow) + 49.13) / 100.29;   // 映射回 0..1 供现有旋转代码使用
-    if (t < 0) t = 0; if (t > 1) t = 1;
-    var theta = needleTheta(t).toFixed(2);
-    needleSetTarget(parseFloat(theta), state.meter);
+    // 表针
+    renderMeter();
 
     // POWER / BYPASS 指示
     var p = document.getElementById("tog-power");
@@ -1072,12 +1080,17 @@ function needleTheta(t) {
         render();
       });
 
-      // 实时 GR（30 Hz，来自音频线程的原子量）
-      window.__JUCE__.backend.addEventListener("toire76Gr", function (payload) {
-        if (payload && payload.length) {
+      // 实时 GR + 输入/输出电平（30 Hz，来自音频线程的原子量）
+      window.__JUCE__.backend.addEventListener("toire76Meter", function (payload) {
+        if (payload && payload.length >= 3) {
+          state.gr      = parseFloat(payload[0]) || 0;
+          state.inDb    = parseFloat(payload[1]);
+          state.outDb   = parseFloat(payload[2]);
+        } else if (payload && payload.length) {
           state.gr = parseFloat(payload[0]) || 0;
-          renderHud();
         }
+        renderHud();
+        renderMeter();
       });
     }
   }

@@ -22,6 +22,9 @@ class TOIRE76AudioProcessor final : public juce::AudioProcessor
 public:
     /** 供编辑器定时读取的实时增益衰减（dB，正数=压得更多） */
     std::atomic<float> grDbForUi { 0.0f };
+    /** 表针用：输入/输出峰值电平（dBFS） */
+    std::atomic<float> meterInDb  { -100.0f };
+    std::atomic<float> meterOutDb { -100.0f };
 
     TOIRE76AudioProcessor();
     ~TOIRE76AudioProcessor() override;

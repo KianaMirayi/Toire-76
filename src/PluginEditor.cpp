@@ -129,8 +129,10 @@ void TOIRE76AudioProcessorEditor::timerCallback()
         return;
 
     juce::Array<juce::var> msg;
-    msg.add (juce::var ((double) processor.grDbForUi.load (std::memory_order_relaxed)));
-    webView->emitEventIfBrowserIsVisible ("toire76Gr", msg);
+    msg.add (juce::var ((double) processor.grDbForUi.load  (std::memory_order_relaxed)));
+    msg.add (juce::var ((double) processor.meterInDb.load  (std::memory_order_relaxed)));
+    msg.add (juce::var ((double) processor.meterOutDb.load (std::memory_order_relaxed)));
+    webView->emitEventIfBrowserIsVisible ("toire76Meter", msg);
 }
 
 void TOIRE76AudioProcessorEditor::visibilityChanged()
