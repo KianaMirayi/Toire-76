@@ -197,10 +197,17 @@ void TOIRE76AudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
         return;
 
     const bool powered  = powerParam  == nullptr || powerParam->load()  > 0.5f;
-    // 表针电平：处理前先量输入峰值
-    float inPeakForMeter = 0.0f;
-    for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
-        inPeakForMeter = juce::jmax (inPeakForMeter, buffer.getMagnitude (ch, 0, buffer.getNumSamples()));
+    // 输入 RMS（处理前量，供表针使用）
+    float inRmsLinear = 0.0f;
+    {
+        double sum = 0.0; int n = 0;
+        for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
+        {
+            const auto* d = buffer.getReadPointer (ch);
+            for (int i = 0; i < numSamples; ++i) { sum += (double) d[i] * (double) d[i]; ++n; }
+        }
+        inRmsLinear = n > 0 ? (float) std::sqrt (sum / (double) n) : 0.0f;
+    }
 
     const bool bypassed = bypassParam != nullptr && bypassParam->load() > 0.5f;
 
@@ -210,6 +217,10 @@ void TOIRE76AudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
         for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
             buffer.clear (ch, 0, numSamples);
 
+        grDbForUi.store (0.0f, std::memory_order_relaxed);
+        meterInRmsDb = meterOutRmsDb = -100.0f;
+        meterInDb.store (-100.0f, std::memory_order_relaxed);
+        meterOutDb.store (-100.0f, std::memory_order_relaxed);
         return;
     }
 
@@ -292,13 +303,34 @@ void TOIRE76AudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     grDbForUi.store (powered && ! bypassed ? (float) compressor.grDb() : 0.0f,
                      std::memory_order_relaxed);
 
-    float outPeakForMeter = 0.0f;
-    for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
-        outPeakForMeter = juce::jmax (outPeakForMeter, buffer.getMagnitude (ch, 0, buffer.getNumSamples()));
+    // 表针用电平：**RMS**（VU 标准），并做 300 ms 快起慢落，避免逐块跳动
+    auto outputRms = [&buffer, numSamples]
+    {
+        double sum = 0.0; int n = 0;
+        for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
+        {
+            const auto* d = buffer.getReadPointer (ch);
+            for (int i = 0; i < numSamples; ++i) { sum += (double) d[i] * (double) d[i]; ++n; }
+        }
+        return n > 0 ? (float) std::sqrt (sum / (double) n) : 0.0f;
+    };
 
-    auto toDb = [] (float peak) { return juce::Decibels::gainToDecibels (juce::jmax (peak, 1.0e-6f), -100.0f); };
-    meterInDb.store  (toDb (inPeakForMeter),  std::memory_order_relaxed);
-    meterOutDb.store (toDb (outPeakForMeter), std::memory_order_relaxed);
+    auto toDb = [] (float rms) { return juce::Decibels::gainToDecibels (juce::jmax (rms, 1.0e-6f), -100.0f); };
+
+    const float blockSecs = (float) numSamples / (float) juce::jmax (1.0, getSampleRate());
+    const float relCoef  = std::exp (-blockSecs / 0.30f);          // 300 ms 回落
+    auto smooth = [] (float prev, float now, float rc)
+    {
+        return now > prev ? now : prev * rc + now * (1.0f - rc);   // 快起慢落
+    };
+
+    const float inRms  = toDb (inRmsLinear);
+    const float outRms = toDb (outputRms());
+    meterInRmsDb  = smooth (meterInRmsDb,  inRms,  relCoef);
+    meterOutRmsDb = smooth (meterOutRmsDb, outRms, relCoef);
+
+    meterInDb.store  (meterInRmsDb,  std::memory_order_relaxed);
+    meterOutDb.store (meterOutRmsDb, std::memory_order_relaxed);
 }
 
 //==============================================================================

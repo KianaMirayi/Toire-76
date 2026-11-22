@@ -26,6 +26,9 @@ public:
     std::atomic<float> meterInDb  { -100.0f };
     std::atomic<float> meterOutDb { -100.0f };
 
+    float meterInRmsDb  = -100.0f;   // 表针平滑状态
+    float meterOutRmsDb = -100.0f;
+
     TOIRE76AudioProcessor();
     ~TOIRE76AudioProcessor() override;
 
