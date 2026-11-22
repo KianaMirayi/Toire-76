@@ -983,49 +983,20 @@ function needleTheta(t) {
   ];
   var presetIndex = 0;
 
-  /* ── 用户预设（存在本机 localStorage）── */
-  var USER_PRESETS = [];
-  function loadUserPresets() {
-    try {
-      var raw = window.localStorage.getItem("t76upresets");
-      USER_PRESETS = raw ? JSON.parse(raw) : [];
-      if (!Array.isArray(USER_PRESETS)) USER_PRESETS = [];
-    } catch (e) { USER_PRESETS = []; }
-  }
-  function saveUserPresets() {
-    try { window.localStorage.setItem("t76upresets", JSON.stringify(USER_PRESETS)); } catch (e) {}
-  }
+  /* ── 用户预设（由 C++ 从插件目录读取，事件推送到前端）── */
+  var FILE_PRESETS = [];
+
   function allPresets() {
-    return PRESETS.map(function (p, i) { return { p: p, kind: "factory", idx: i }; })
-      .concat(USER_PRESETS.map(function (p, i) { return { p: p, kind: "user", idx: i }; }));
+    return FILE_PRESETS.map(function (p, i) { return { p: p, kind: "user", idx: i }; })
+      .concat(PRESETS.map(function (p, i) { return { p: p, kind: "factory", idx: i }; }));
   }
   function currentSnapshot() {
     return { input: state.input, output: state.output, attack: state.attack,
              release: state.release, ratio: state.ratio, meter: state.meter };
   }
-  function addUserPreset(name) {
-    name = (name || "").trim();
-    if (!name) return false;
-    var snap = currentSnapshot();
-    var item = { name: name, input: snap.input, output: snap.output,
-                 attack: snap.attack, release: snap.release,
-                 ratio: snap.ratio, meter: snap.meter };
-    var existing = -1;
-    for (var i = 0; i < USER_PRESETS.length; i++) if (USER_PRESETS[i].name === name) existing = i;
-    if (existing >= 0) USER_PRESETS[existing] = item; else USER_PRESETS.push(item);
-    saveUserPresets();
-    rebuildPresetList();
-    return true;
-  }
-  function deleteSelectedUserPreset() {
-    var sel = document.getElementById("preset-select");
-    if (!sel) return false;
-    var item = allPresets()[sel.selectedIndex];
-    if (!item || item.kind !== "user") return false;
-    USER_PRESETS.splice(item.idx, 1);
-    saveUserPresets();
-    rebuildPresetList();
-    return true;
+  function sendPresetCmd(action, name) {
+    if (!HAS_BACKEND || !window.__JUCE__ || !window.__JUCE__.backend) return;
+    window.__JUCE__.backend.emitEvent("t76PresetCmd", { action: action, name: name || "" });
   }
 
   function applyPreset(i) {
@@ -1053,33 +1024,45 @@ function needleTheta(t) {
     var sel = document.getElementById("preset-select");
     if (!sel) return;
     sel.innerHTML = "";
+    var g2 = document.createElement("optgroup");
+    g2.label = "用户预设";
+    if (!FILE_PRESETS.length) {
+      var e = document.createElement("option");
+      e.value = "-1"; e.textContent = "（无用户预设）"; e.disabled = true;
+      g2.appendChild(e);
+    } else {
+      FILE_PRESETS.forEach(function (pr, i) {
+        var o = document.createElement("option");
+        o.value = i; o.textContent = pr.name || ("Preset " + (i + 1));
+        g2.appendChild(o);
+      });
+    }
+    sel.appendChild(g2);
+
     var g1 = document.createElement("optgroup");
     g1.label = "工厂预设";
     PRESETS.forEach(function (pr, i) {
       var o = document.createElement("option");
-      o.value = i; o.textContent = pr.name;
+      o.value = 1000 + i; o.textContent = pr.name;
       g1.appendChild(o);
     });
     sel.appendChild(g1);
-    if (USER_PRESETS.length) {
-      var g2 = document.createElement("optgroup");
-      g2.label = "用户预设";
-      USER_PRESETS.forEach(function (pr, i) {
-        var o = document.createElement("option");
-        o.value = PRESETS.length + i; o.textContent = pr.name;
-        g2.appendChild(o);
-      });
-      sel.appendChild(g2);
-    }
-    sel.selectedIndex = Math.max(0, Math.min(allPresets().length - 1, presetIndex));
+
+    var list = allPresets();
+    sel.selectedIndex = FILE_PRESETS.length ? 0 : 0;
+    if (!FILE_PRESETS.length) sel.selectedIndex = 0;
   }
 
   function buildPresetBar() {
     var sel = document.getElementById("preset-select");
     if (!sel) return;
-    loadUserPresets();
     rebuildPresetList();
-    sel.addEventListener("change", function () { applyPreset(parseInt(sel.value, 10) || 0); });
+    sel.addEventListener("change", function () {
+      var v = parseInt(sel.value, 10);
+      if (isNaN(v) || v < 0) return;
+      if (v >= 1000) applyPreset(FILE_PRESETS.length + (v - 1000));
+      else applyPreset(v);
+    });
     var pv = document.getElementById("preset-prev");
     var nx = document.getElementById("preset-next");
     if (pv) pv.addEventListener("click", function () { applyPreset(presetIndex - 1); });
@@ -1089,12 +1072,15 @@ function needleTheta(t) {
     var del = document.getElementById("preset-del");
     var nm = document.getElementById("preset-name");
     if (sv) sv.addEventListener("click", function () {
-      var name = nm ? nm.value : "";
-      if (!name) { if (nm) nm.focus(); return; }
-      addUserPreset(name);
-      applyPreset(allPresets().length - 1);
+      sendPresetCmd("save", nm ? nm.value : "");
     });
-    if (del) del.addEventListener("click", function () { deleteSelectedUserPreset(); });
+    if (del) del.addEventListener("click", function () {
+      var v = parseInt(sel.value, 10);
+      if (!isNaN(v) && v >= 0 && v < FILE_PRESETS.length) {
+        sendPresetCmd("delete", FILE_PRESETS[v].name);
+      }
+    });
+    sendPresetCmd("refresh");
   }
 
   function renderHud() {
@@ -1289,6 +1275,12 @@ function needleTheta(t) {
       window.__JUCE__.backend.addEventListener("toire76Status", function (payload) {
         cppStatus = (payload && payload.length) ? ("cpp " + payload[0]) : "cpp ok";
         render();
+      });
+
+      // 用户预设列表（C++ 扫描插件目录后推送）
+      window.__JUCE__.backend.addEventListener("toire76Presets", function (list) {
+        FILE_PRESETS = Array.isArray(list) ? list : [];
+        rebuildPresetList();
       });
 
       // 实时 GR + 输入/输出电平（30 Hz，来自音频线程的原子量）

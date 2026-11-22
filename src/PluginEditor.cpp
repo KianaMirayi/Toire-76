@@ -123,6 +123,73 @@ TOIRE76AudioProcessorEditor::~TOIRE76AudioProcessorEditor()
     bypassAttachment.reset();
 }
 
+//==============================================================================
+juce::File TOIRE76AudioProcessorEditor::presetDir()
+{
+    auto dir = juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory)
+                   .getChildFile ("TOiRE-76").getChildFile ("Presets");
+    dir.createDirectory();
+    return dir;
+}
+
+void TOIRE76AudioProcessorEditor::emitPresetList()
+{
+    if (webView == nullptr) return;
+
+    juce::Array<juce::var> list;
+    auto files = presetDir().findChildFiles (juce::File::findFiles, false, "*.t76preset");
+    files.sort();
+
+    for (auto& f : files)
+    {
+        auto obj = juce::JSON::parse (f.loadFileAsString());
+        if (auto* dyn = obj.getDynamicObject())
+        {
+            auto* copy = new juce::DynamicObject (*dyn);
+            copy->setProperty ("name", f.getFileNameWithoutExtension());
+            list.add (juce::var (copy));
+        }
+    }
+
+    webView->emitEventIfBrowserIsVisible ("toire76Presets", juce::var (list));
+}
+
+void TOIRE76AudioProcessorEditor::savePresetAs (const juce::String& suggestedName)
+{
+    auto name = suggestedName.trim();
+    if (name.isEmpty())
+        name = "Preset " + juce::Time::getCurrentTime().formatted ("%H%M%S");
+
+    auto chooser = std::make_shared<juce::FileChooser> ("保存预设",
+        presetDir().getChildFile (name + ".t76preset"), "*.t76preset");
+
+    chooser->launchAsync (juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles,
+                          [this, chooser] (const juce::FileChooser& fc)
+    {
+        auto file = fc.getResult();
+        if (file == juce::File()) return;
+        if (! file.hasFileExtension ("t76preset")) file = file.withFileExtension ("t76preset");
+
+        auto* obj = new juce::DynamicObject();
+        auto readParam = [this] (const char* id) -> double
+        {
+            if (auto* p = processor.apvts.getParameter (id))
+                if (auto* raw = processor.apvts.getRawParameterValue (id))
+                    return (double) p->convertFrom0to1 (raw->load());
+            return 0.0;
+        };
+        obj->setProperty ("input",   readParam ("input"));
+        obj->setProperty ("output",  readParam ("output"));
+        obj->setProperty ("attack",  readParam ("attack"));
+        obj->setProperty ("release", readParam ("release"));
+        obj->setProperty ("ratio",   readParam ("ratio"));
+        obj->setProperty ("meter",   readParam ("meter"));
+
+        file.replaceWithText (juce::JSON::toString (juce::var (obj), false));
+        emitPresetList();
+    });
+}
+
 void TOIRE76AudioProcessorEditor::timerCallback()
 {
     if (webView == nullptr || ! pageLoaded)
@@ -175,7 +242,22 @@ void TOIRE76AudioProcessorEditor::ensureWebView()
                           .withOptionsFrom (ratioRelay)
                           .withOptionsFrom (meterRelay)
                           .withOptionsFrom (powerRelay)
-                          .withOptionsFrom (bypassRelay);
+                          .withOptionsFrom (bypassRelay)
+                          .withEventListener ("t76PresetCmd", [this] (const juce::var& payload)
+                          {
+                              const juce::String action = payload.getProperty ("action", juce::var()).toString();
+                              if (action == "save")
+                                  savePresetAs (payload.getProperty ("name", juce::var()).toString());
+                              else if (action == "delete")
+                              {
+                                  auto nm = payload.getProperty ("name", juce::var()).toString();
+                                  if (nm.isNotEmpty())
+                                      presetDir().getChildFile (nm + ".t76preset").deleteFile();
+                                  emitPresetList();
+                              }
+                              else if (action == "refresh")
+                                  emitPresetList();
+                          });
 
     webView = std::make_unique<Torei76WebView> (opts);
 
@@ -201,6 +283,7 @@ void TOIRE76AudioProcessorEditor::ensureWebView()
 
         // 实时 GR 推送到网页：30 Hz，音频线程只写原子量
         startTimerHz (30);
+        emitPresetList();
     };
 
     // ⚠️⚠️ 顺序是硬性的：

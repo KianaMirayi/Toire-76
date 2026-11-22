@@ -58,6 +58,9 @@ public:
 
 private:
     void ensureWebView();
+    void emitPresetList();
+    static juce::File presetDir();
+    void savePresetAs (const juce::String& suggestedName);
 
     TOIRE76AudioProcessor& processor;
 
