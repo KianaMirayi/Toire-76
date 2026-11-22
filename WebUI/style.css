@@ -44,6 +44,12 @@ body {
   background: #141416; color: #e6e6ea; border: 1px solid #3a3a40; border-radius: 2px;
   font: 11px/1 ui-monospace, Consolas, monospace;
 }
+#presetbar #preset-name {
+  height: 18px; width: 130px; padding: 0 5px;
+  background: #141416; color: #e6e6ea; border: 1px solid #3a3a40; border-radius: 2px;
+  font: 11px/1 ui-monospace, Consolas, monospace;
+}
+#presetbar #preset-name::placeholder { color: #5a5a62; }
 #preset-badge { margin-left: auto; color: #6b6b72; letter-spacing: .08em; }
 
 /* METER = OFF：表盘整体变暗 */

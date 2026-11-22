@@ -908,6 +908,7 @@ function needleTheta(t) {
        grRel : GR 档额外回落平滑（毫秒，0=不加，交给弹簧本身）
      默认值来自手动调参定稿：ω=19.3 rad/s、ζ=0.50、释放 540 ms、GR 回落 50 ms
      ⚠️ 内部子步必须 ≥120 Hz，否则过冲会被离散化吃掉（我们是 240 Hz）*/
+  var ENABLE_TUNER = false;   // 表针调参面板开关（已定稿）
   var NEEDLE_CFG = { omega: 19.3, zeta: 0.50, atkMs: 5, relMs: 540, grRelMs: 50 };
   try {
     var _saved = JSON.parse(window.localStorage.getItem("t76needle") || "{}");
@@ -982,9 +983,56 @@ function needleTheta(t) {
   ];
   var presetIndex = 0;
 
+  /* ── 用户预设（存在本机 localStorage）── */
+  var USER_PRESETS = [];
+  function loadUserPresets() {
+    try {
+      var raw = window.localStorage.getItem("t76upresets");
+      USER_PRESETS = raw ? JSON.parse(raw) : [];
+      if (!Array.isArray(USER_PRESETS)) USER_PRESETS = [];
+    } catch (e) { USER_PRESETS = []; }
+  }
+  function saveUserPresets() {
+    try { window.localStorage.setItem("t76upresets", JSON.stringify(USER_PRESETS)); } catch (e) {}
+  }
+  function allPresets() {
+    return PRESETS.map(function (p, i) { return { p: p, kind: "factory", idx: i }; })
+      .concat(USER_PRESETS.map(function (p, i) { return { p: p, kind: "user", idx: i }; }));
+  }
+  function currentSnapshot() {
+    return { input: state.input, output: state.output, attack: state.attack,
+             release: state.release, ratio: state.ratio, meter: state.meter };
+  }
+  function addUserPreset(name) {
+    name = (name || "").trim();
+    if (!name) return false;
+    var snap = currentSnapshot();
+    var item = { name: name, input: snap.input, output: snap.output,
+                 attack: snap.attack, release: snap.release,
+                 ratio: snap.ratio, meter: snap.meter };
+    var existing = -1;
+    for (var i = 0; i < USER_PRESETS.length; i++) if (USER_PRESETS[i].name === name) existing = i;
+    if (existing >= 0) USER_PRESETS[existing] = item; else USER_PRESETS.push(item);
+    saveUserPresets();
+    rebuildPresetList();
+    return true;
+  }
+  function deleteSelectedUserPreset() {
+    var sel = document.getElementById("preset-select");
+    if (!sel) return false;
+    var item = allPresets()[sel.selectedIndex];
+    if (!item || item.kind !== "user") return false;
+    USER_PRESETS.splice(item.idx, 1);
+    saveUserPresets();
+    rebuildPresetList();
+    return true;
+  }
+
   function applyPreset(i) {
-    presetIndex = (i + PRESETS.length) % PRESETS.length;
-    var pv = PRESETS[presetIndex];
+    var list = allPresets();
+    i = Math.max(0, Math.min(list.length - 1, i));
+    presetIndex = i;
+    var pv = list[i].p;
     state.input = pv.input; state.output = pv.output;
     state.attack = pv.attack; state.release = pv.release;
     state.ratio = pv.ratio; state.meter = pv.meter;
@@ -996,24 +1044,57 @@ function needleTheta(t) {
     pushChoice("meter", pv.meter);
     var sel = document.getElementById("preset-select");
     if (sel) sel.selectedIndex = presetIndex;
+    var nm = document.getElementById("preset-name");
+    if (nm) nm.value = pv.name;
     render();
+  }
+
+  function rebuildPresetList() {
+    var sel = document.getElementById("preset-select");
+    if (!sel) return;
+    sel.innerHTML = "";
+    var g1 = document.createElement("optgroup");
+    g1.label = "工厂预设";
+    PRESETS.forEach(function (pr, i) {
+      var o = document.createElement("option");
+      o.value = i; o.textContent = pr.name;
+      g1.appendChild(o);
+    });
+    sel.appendChild(g1);
+    if (USER_PRESETS.length) {
+      var g2 = document.createElement("optgroup");
+      g2.label = "用户预设";
+      USER_PRESETS.forEach(function (pr, i) {
+        var o = document.createElement("option");
+        o.value = PRESETS.length + i; o.textContent = pr.name;
+        g2.appendChild(o);
+      });
+      sel.appendChild(g2);
+    }
+    sel.selectedIndex = Math.max(0, Math.min(allPresets().length - 1, presetIndex));
   }
 
   function buildPresetBar() {
     var sel = document.getElementById("preset-select");
     if (!sel) return;
-    sel.innerHTML = "";
-    PRESETS.forEach(function (pr, i) {
-      var o = document.createElement("option");
-      o.value = i; o.textContent = pr.name;
-      sel.appendChild(o);
-    });
-    sel.selectedIndex = presetIndex;
+    loadUserPresets();
+    rebuildPresetList();
     sel.addEventListener("change", function () { applyPreset(parseInt(sel.value, 10) || 0); });
     var pv = document.getElementById("preset-prev");
     var nx = document.getElementById("preset-next");
     if (pv) pv.addEventListener("click", function () { applyPreset(presetIndex - 1); });
     if (nx) nx.addEventListener("click", function () { applyPreset(presetIndex + 1); });
+
+    var sv = document.getElementById("preset-save");
+    var del = document.getElementById("preset-del");
+    var nm = document.getElementById("preset-name");
+    if (sv) sv.addEventListener("click", function () {
+      var name = nm ? nm.value : "";
+      if (!name) { if (nm) nm.focus(); return; }
+      addUserPreset(name);
+      applyPreset(allPresets().length - 1);
+    });
+    if (del) del.addEventListener("click", function () { deleteSelectedUserPreset(); });
   }
 
   function renderHud() {
@@ -1052,6 +1133,7 @@ function needleTheta(t) {
 
   /* 表针参数调试面板（仅 DEBUG）：ω / ζ / 释放时间，实时生效并记忆 */
   function buildTuner() {
+    if (!ENABLE_TUNER) return;   // 表针弹道已定稿，面板关闭
     if (document.getElementById("tuner")) return;
     var d = el("div", { id: "tuner" });
     var rows = [
