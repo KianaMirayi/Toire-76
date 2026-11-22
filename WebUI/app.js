@@ -1016,7 +1016,7 @@ function needleTheta(t) {
     ];
     rows.forEach(function (r) {
       var wrap = el("div", { "class": "trow" });
-      var lab = el("span"); lab.textContent = r[1];
+      var lab = el("span"); lab.textContent = r[1]; lab.style.whiteSpace = "nowrap";
       var inp = el("input", { type: "range", min: r[2], max: r[3], step: r[4] });
       inp.value = NEEDLE_CFG[r[0]];
       var val = el("span"); val.className = "tval";
@@ -1031,7 +1031,17 @@ function needleTheta(t) {
       wrap.appendChild(lab); wrap.appendChild(inp); wrap.appendChild(val);
       d.appendChild(wrap);
     });
+    d.className = "";
     document.body.appendChild(d);
+
+    // 右下角 ⚙ 开关
+    var tg = el("div", { id: "tuner-toggle" });
+    tg.textContent = "\u2699";
+    tg.title = "表针参数";
+    tg.addEventListener("click", function () {
+      d.classList.toggle("open");
+    });
+    document.body.appendChild(tg);
   }
 
   function render() {

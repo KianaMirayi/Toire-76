@@ -141,12 +141,27 @@ body {
 
 /* 表针参数调试面板（仅 DEBUG） */
 #tuner {
-  position: absolute; left: 618px; bottom: 2px;
-  width: 196px; padding: 3px 6px;
-  background: rgba(0,0,0,.72); border: 1px solid #2a5; border-radius: 3px;
-  font: 9px/1.25 ui-monospace, Consolas, monospace; color: #7ef0a0;
-  z-index: 999;
+  position: absolute; left: 236px; bottom: 2px;
+  display: none;                 /* 默认隐藏，点右下角 ⚙ 展开 */
+  align-items: center; gap: 9px;
+  padding: 3px 8px;
+  background: rgba(0,0,0,.80); border: 1px solid #2a5; border-radius: 3px;
+  font: 9px/1.2 ui-monospace, Consolas, monospace; color: #7ef0a0;
+  white-space: nowrap; z-index: 999;
 }
+#tuner.open { display: flex; }
+#tuner .trow { display: flex; align-items: center; gap: 3px; white-space: nowrap; }
+#tuner .trow span:first-child { white-space: nowrap; }
+#tuner input[type=range] { width: 62px; height: 10px; }
+#tuner .tval { width: 44px; text-align: right; color: #ffd27e; white-space: nowrap; }
+#tuner-toggle {
+  position: absolute; right: 4px; bottom: 3px;
+  width: 16px; height: 16px; border-radius: 3px;
+  background: rgba(0,0,0,.65); border: 1px solid #2a5;
+  color: #7ef0a0; font: 11px/14px ui-monospace, monospace; text-align: center;
+  cursor: pointer; z-index: 1000; user-select: none;
+}
+#tuner-toggle:hover { background: rgba(0,60,20,.75); }
 #tuner .trow { display: flex; align-items: center; gap: 4px; margin: 1px 0; }
 #tuner .trow span:first-child { width: 54px; }
 #tuner input[type=range] { flex: 1; height: 10px; }
