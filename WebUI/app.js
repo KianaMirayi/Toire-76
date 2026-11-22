@@ -985,6 +985,7 @@ function needleTheta(t) {
 
   /* ── 用户预设（由 C++ 从插件目录读取，事件推送到前端）── */
   var FILE_PRESETS = [];
+  var presetSelectValue = "-1";
 
   function allPresets() {
     return FILE_PRESETS.map(function (p, i) { return { p: p, kind: "user", idx: i }; })
@@ -1023,9 +1024,17 @@ function needleTheta(t) {
   function rebuildPresetList() {
     var sel = document.getElementById("preset-select");
     if (!sel) return;
+    var prev = sel.value;
     sel.innerHTML = "";
+
     var g2 = document.createElement("optgroup");
     g2.label = "用户预设";
+    // 最上方固定一条：保存当前参数为预设
+    var saveItem = document.createElement("option");
+    saveItem.value = "-2";
+    saveItem.textContent = "保存当前参数为预设";
+    g2.appendChild(saveItem);
+
     if (!FILE_PRESETS.length) {
       var e = document.createElement("option");
       e.value = "-1"; e.textContent = "（无用户预设）"; e.disabled = true;
@@ -1048,42 +1057,41 @@ function needleTheta(t) {
     });
     sel.appendChild(g1);
 
-    var list = allPresets();
-    sel.selectedIndex = FILE_PRESETS.length ? 0 : 0;
-    if (!FILE_PRESETS.length) sel.selectedIndex = 0;
+    // 默认选中：有用户预设选第一个，否则选占位项
+    var want = FILE_PRESETS.length ? "0" : "-1";
+    if (prev && prev !== "-2" && prev !== "-1" && sel.querySelector('option[value="' + prev + '"]')) want = prev;
+    sel.value = want;
+    presetSelectValue = want;
   }
 
   function buildPresetBar() {
     var sel = document.getElementById("preset-select");
     if (!sel) return;
     rebuildPresetList();
+
     sel.addEventListener("change", function () {
       var v = parseInt(sel.value, 10);
-      if (isNaN(v) || v < 0) return;
+      if (v === -2) {
+        // 「保存当前参数为预设」：弹保存对话框（含位置与名称）
+        sendPresetCmd("save", "");
+        sel.value = presetSelectValue || "-1";
+        return;
+      }
+      if (isNaN(v) || v < 0) { sel.value = presetSelectValue || "-1"; return; }
+      presetSelectValue = sel.value;
       if (v >= 1000) applyPreset(FILE_PRESETS.length + (v - 1000));
       else applyPreset(v);
     });
+
     var pv = document.getElementById("preset-prev");
     var nx = document.getElementById("preset-next");
     if (pv) pv.addEventListener("click", function () { applyPreset(presetIndex - 1); });
     if (nx) nx.addEventListener("click", function () { applyPreset(presetIndex + 1); });
 
-    var sv = document.getElementById("preset-save");
-    var del = document.getElementById("preset-del");
-    var nm = document.getElementById("preset-name");
-    if (sv) sv.addEventListener("click", function () {
-      sendPresetCmd("save", nm ? nm.value : "");
-    });
-    if (del) del.addEventListener("click", function () {
-      var v = parseInt(sel.value, 10);
-      if (!isNaN(v) && v >= 0 && v < FILE_PRESETS.length) {
-        sendPresetCmd("delete", FILE_PRESETS[v].name);
-      }
-    });
     sendPresetCmd("refresh");
   }
 
-  function renderHud() {
+  function renderHud() {  function renderHud() {
     if (!DEBUG) return;
     var hud = document.getElementById("hud");
     if (!hud) return;
