@@ -29,7 +29,8 @@ namespace toire76 {
 class Sidechain {
 public:
     // release 模型的标识（dsp_test 会打印，用来确认跑的是新编译产物）
-    static constexpr const char* kReleaseModel = "dual-cap-v3";
+    //   v4：短过载段不再"平台 + 后段跳升" —— 见 kRelHiDrop / kRelHiX0 的注释。
+    static constexpr const char* kReleaseModel = "dual-cap-v4";
     // attack 控制律的标识（同上；改映射/平滑时同步改，用来确认二进制是哪一版）
     static constexpr const char* kAttackModel = "gr-attack-v2";
 
@@ -128,6 +129,51 @@ public:
     //     UAD 停在 12–16 dB → 空隙后回冲 33.8 dB vs 24.2 dB（深 9 dB；
     //     旧表 33.0，所以这不是本次重标引入的）。
     static constexpr double kGrSilenceCal = 1.38;
+
+    // ── 2026-11-22：τ(burst) 形状（节目相关性）两处改动 ────────────────────
+    //
+    // 症状（20:1 / input 1.0 / attack 0.67 / 3 s −40 载波，10-burst-sweep）：
+    //   release 0.34/0.67/1.00 三档、10 ms…2 s 八个过载时长，
+    //   UAD 的 τ 从第一个点就开始缓升（0.34 档 900→1160，0.67 档 300→620），
+    //   我们却是"平台 + 后段跳升"（0.67 档 420 420 420 420 420 420 440 580）。
+    //   24 点相对误差 mean 15.9% / p90 32.7%。
+    //
+    // 根因（用 sim/harness 逐样本看的内部状态）：
+    //   ① 任何 ≥2 ms 的过载都会让 vcFast 在一个采样内冲过 anti-windup 上限
+    //      （r 是"还没被压下去"的整流值，比平衡点大两个数量级），
+    //      于是每次释放都从**同一个天花板**（GR 40.3 dB）起步，
+    //      与过载时长无关 → 短过载被抬成平台。
+    //      UAD 是"GR 在 3–5 ms 内升到环路平衡点（−6 dBFS 时 32.3 dB）就不再涨"。
+    //   ② 慢电容的充电是单一 τ（0.37–0.75 s），10–100 ms 的过载几乎充不进去，
+    //      所以 τ(burst) 在 500 ms 之前完全平。
+    //   本次只修 ①（它占误差的大头）。② 试过两段式充电，插件层几乎不动（见下），
+    //   真正要修 ② 得动"慢电容的充电目标"，那会连带改静态曲线，留给下一轮。
+    //
+    // 改法（不动静态曲线 / 单点 release 的标定）：
+    //   kRelHiDrop/kRelHiX0：快电容在**电荷接近上限**时放电 τ 缩短
+    //      （vc/vcCeil > 0.78 起线性，到 1.0 时 ×0.30）。
+    //      冲顶那一段（≈4–5 dB）被快速泄掉，剩下的仍按原 τ 走；
+    //      浅压缩（vc/vcCeil ≈ 0.65）完全不吃 —— 所以浅压缩单点 release 不动；
+    //      深度压缩单点（1.5 s 过载）在 0.85/1.00 档吃到一点（τ +1.5…+3.2%）。
+    //
+    // 试过但不行的（留给下一轮，别再花时间）：
+    //   · 把快电容的充电目标钳到"静态平衡点"（用输入包络反算）：短过载的
+    //     释放改由慢电容主导 → τ 反而全线变长（0.34 档 1056→1236 ms）。
+    //   · 快电容单独一个更低的上限（0.9×vcCeil）：深度压缩单点 τ +10%，破 4%。
+    //   · 慢电容两段式充电（前 12% 用 50 ms 充）：插件层 τ(burst) 几乎不动，
+    //     但 dsp_test §7 的过冲量掉 0.9–1.2 dB（超 ±0.5），不划算。
+    //   · 只按"快/慢电容比"泄放（不按电荷深度）：插件层 τ(burst) 只从 17.1% 到 14.0%。
+    //
+    // 标定结果（真插件渲染，尺子 = 20:1 / in 1.0 / attack 0.67 / 3 s −40 载波）：
+    //   24 点相对误差 mean 15.9%→13.3%、p90 32.7%→31.5%（按任务书那张 UAD 表；
+    //   同一台机器重测 UAD 时是 17.1%→13.0% / 28.5%）。
+    //   残余误差集中在 0.67/1.00 档的 10–100 ms 段（+13…+26%），结构上被
+    //   "浅压缩单点 release"钉住：再快 25% 的 τ_fast 会让浅压缩 1.0 档掉到 −26%。
+    //   静态 MAE 0.57 dB；深压缩单点 τ −1.2…+3.2%；浅压缩 −0.3…+2.9%；
+    //   热素材峰值相对上一版 ≤0.17 dB；dsp_test §7 = 19.08/18.73/17.71/6.32
+    //   （基准 20.17/18.91/17.84/6.39，0 档 −1.09 是唯一超 ±0.5 的点）。
+    static constexpr double kRelHiX0 = 0.78;     // 开始"泄放"的 vcFast/vcCeil
+    static constexpr double kRelHiDrop = 0.70;   // 到上限时放电 τ 缩短的比例（×0.30）
 
     void prepare(double sampleRate) {
         sr_ = sampleRate;
@@ -372,7 +418,17 @@ public:
         //    3 ms 三档，静态 GR 在 −25/−10/−3/0 dBFS 逐点相同）证明：
         //    只把 detTau_ 换成几百 µs，静态曲线不动，而素材峰值差从 −7.4 dB 收到 0。
         //    真正决定静态比的是 control() 的 (R−1)·dBabove 律，不是检波 τ。
-        const double tauF = (r > vcFast_) ? detTau_ * allDetScale_ : tauRelFast_;
+        //
+        //    2026-11-22：放电 τ 在电荷接近上限时缩短（见 kRelHiDrop 的注释）。
+        //    这是"把瞬态冲顶那 4–5 dB 快速泄掉"的那条路 —— 没有它，短过载的释放
+        //    永远从天花板起步，τ(burst) 就是平台。
+        double relFast = tauRelFast_;
+        {
+            const double x = std::clamp(vcFast_ / std::max(vcCeil_, 1e-15), 0.0, 1.0);
+            const double hi = std::clamp((x - kRelHiX0) / (1.0 - kRelHiX0), 0.0, 1.0);
+            relFast = tauRelFast_ * (1.0 - kRelHiDrop * hi);
+        }
+        const double tauF = (r > vcFast_) ? detTau_ * allDetScale_ : relFast;
         vcFast_ += (r - vcFast_) * coef(tauF);
 
         // ② C_slow：慢充 / 慢放。b 秒持续过载后充到 (1−e^{−b/T})，
