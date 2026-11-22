@@ -106,7 +106,7 @@ public:
 
 private:
     // 整机增益：45 dB（手册）+ 1.96 dB 标定差 - 2.71 dB（低电平段 make-up 对齐参考插件）
-    static constexpr double kTotalGainDb = 44.25;   // 整机 45 dB ±1【1965 p.7】
+    static constexpr double kTotalGainDb = 45.25;   // 整机 45 dB ±1【1965 p.7】
 
     static double dbToLin(double dB) { return std::pow(10.0, dB / 20.0); }
     static double db(double lin) { return 20.0 * std::log10(std::max(lin, 1e-12)); }
